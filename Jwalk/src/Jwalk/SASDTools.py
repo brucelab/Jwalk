@@ -583,7 +583,6 @@ def calculate_distance(cords):
 def get_euclidean_distances(sasds, pdb, aa1, aa2):
 
     residues = {}
-    euc_dists = {}
     with open (pdb) as inf:
         for line in inf:
             if line.startswith('ATOM') and (line[12:16].strip() == 'CA'):
@@ -595,17 +594,18 @@ def get_euclidean_distances(sasds, pdb, aa1, aa2):
                 float(line[38:46].strip()),
                 float(line[46:54].strip())]
     
+    coords = {}
     for k,v in residues.items():
-        for k1,v1 in residues.items():
-            if k1 != k:
-            
-                euc_dists[int(k[0]),k[1], int(k1[0]),k1[1]] = calculate_distance([v,v1])
-    
+        coords[int(k[0]),k[1]] = v
+
     sasds_and_eucs = {}
     
+    # only the distances between the ends of each sasd are needed
     for s in sasds:
-        if (s[0][0],s[0][1],s[1][0],s[1][1]) in euc_dists:
-            sasds_and_eucs[s[0],s[1],s[2],euc_dists[(s[0][0],s[0][1],s[1][0],s[1][1])]] = sasds[s]
+        start = (s[0][0],s[0][1])
+        end = (s[1][0],s[1][1])
+        if start != end and start in coords and end in coords:
+            sasds_and_eucs[s[0],s[1],s[2],calculate_distance([coords[start],coords[end]])] = sasds[s]
             
     return sasds_and_eucs
 
