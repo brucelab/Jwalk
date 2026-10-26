@@ -20,7 +20,7 @@
 #
 #===============================================================================
 
-from numpy import array,  zeros, real,sqrt,exp
+from numpy import array,  zeros, real,sqrt,exp, bincount
 from collections import OrderedDict
 import sys
 
@@ -351,7 +351,11 @@ def generate_solvent_accessible_surface(densMap,prot,aa1_CA, aa2_CA):
         
     backbone = ['N','CA','C','O']                         
     
-    # generate solvent accessible surface
+    # which voxel sphere is placed around each type of atom
+    sphere_type = {'C': 'CA', 'O': 'OH', 'N': 'N', 'S': 'S'}
+    
+    # grid voxel of each atom that has a sphere placed around it
+    centres = {'CA': [], 'OH': [], 'N': [], 'S': []}
     
     for atom in prot.atomList:
         
@@ -362,24 +366,29 @@ def generate_solvent_accessible_surface(densMap,prot,aa1_CA, aa2_CA):
             if ((atom.res_no,atom.chain,atom.res) in aa1_CA and atom.atom_name not in backbone) or (
             (atom.res_no,atom.chain,atom.res) in aa2_CA and atom.atom_name not in backbone):
                 pass
-            # for each atom, expand the corresponding voxel sphere around it to create solvent accessible surface
-            else:
-                if atom.atom_name[:1] == 'C':
-                    for (x,y,z) in sphere['CA']:
-                        if((densMap.x_size() > (pos[0]+x) >= 0) and (densMap.y_size() > (pos[1]+y) >= 0) and (densMap.z_size() > (pos[2]+z) >= 0)):
-                            densMap.fullMap[pos[2]+z][pos[1]+y][pos[0]+x] += 1
-                elif atom.atom_name[:1] == 'O':
-                    for (x,y,z) in sphere['OH']:
-                        if((densMap.x_size() > (pos[0]+x) >= 0) and (densMap.y_size() > (pos[1]+y) >= 0) and (densMap.z_size() > (pos[2]+z) >= 0)):
-                            densMap.fullMap[pos[2]+z][pos[1]+y][pos[0]+x] += 1
-                elif atom.atom_name[:1] == 'N':
-                    for (x,y,z) in sphere['N']:
-                        if((densMap.x_size() > (pos[0]+x) >= 0) and (densMap.y_size() > (pos[1]+y) >= 0) and (densMap.z_size() > (pos[2]+z) >= 0)):
-                            densMap.fullMap[pos[2]+z][pos[1]+y][pos[0]+x] += 1
-                elif atom.atom_name[:1] == 'S':
-                    for (x,y,z) in sphere['S']:
-                        if((densMap.x_size() > (pos[0]+x) >= 0) and (densMap.y_size() > (pos[1]+y) >= 0) and (densMap.z_size() > (pos[2]+z) >= 0)):
-                            densMap.fullMap[pos[2]+z][pos[1]+y][pos[0]+x] += 1
+            elif atom.atom_name[:1] in sphere_type:
+                centres[sphere_type[atom.atom_name[:1]]].append(pos[:3])
+    
+    # for each atom, expand the corresponding voxel sphere around it to create solvent accessible surface
+    z_size, y_size, x_size = densMap.fullMap.shape
+    limit = array([x_size, y_size, z_size])
+    
+    for r in centres:
+        
+        if len(centres[r]) == 0:
+            continue
+        
+        offsets = array(sphere[r])
+        counts = zeros(densMap.fullMap.size, dtype=int)
+        
+        # in blocks of atoms to limit the memory used
+        for i in range(0, len(centres[r]), 2000):
+            voxels = (array(centres[r][i:i+2000])[:,None,:] + offsets[None,:,:]).reshape(-1,3)
+            voxels = voxels[((voxels >= 0) & (voxels < limit)).all(axis=1)]
+            counts += bincount((voxels[:,2]*y_size + voxels[:,1])*x_size + voxels[:,0],
+                               minlength=counts.size)
+        
+        densMap.fullMap += counts.reshape(densMap.fullMap.shape)
                             
     return densMap
         
