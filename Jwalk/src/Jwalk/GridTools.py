@@ -210,7 +210,7 @@ def process_input_crosslinks(uv_xl):
                 chain2 = col[3].rstrip()
                 chain2 = chain2.lstrip()
             except:
-                print "ERROR: formatting error on line "+str(count)+" : "+line
+                print("ERROR: formatting error on line "+str(count)+" : "+line)
                 exit(1)
             # if no chain is given
             if len(chain1) == 0:
@@ -272,17 +272,17 @@ def mark_CAlphas_pairs(densMap, prot, uv_xl):
     
     for x in aa1:
         if x not in atom_check:
-            print "ERROR ! Residue",x[0],"-",x[1], "not in pdb structure - please check input files"
+            print("ERROR ! Residue",x[0],"-",x[1], "not in pdb structure - please check input files")
             rem_x.append((x[0], x[1]))
     for x in aa2:
         if x not in atom_check:
-            print "ERROR ! Residue",x[0],"-",x[1], "not in pdb structure - please check input files"
+            print("ERROR ! Residue",x[0],"-",x[1], "not in pdb structure - please check input files")
             rem_x.append((x[0], x[1]))
         
     # remove crosslinks from crosslink_pairs if one or both residues are not in structure
     index_to_delete = []
     
-    for i in xrange(len(crosslink_pairs)):
+    for i in range(len(crosslink_pairs)):
         [x1, x2] = crosslink_pairs[i]
         if x1 in rem_x:
             index_to_delete.append(i)
@@ -290,7 +290,7 @@ def mark_CAlphas_pairs(densMap, prot, uv_xl):
             index_to_delete.append(i)
     
     crosslink_pairs_hold = []
-    for i in xrange(len(crosslink_pairs)):
+    for i in range(len(crosslink_pairs)):
         if i not in index_to_delete:
             crosslink_pairs_hold.append(crosslink_pairs[i])
             
@@ -343,9 +343,9 @@ def generate_solvent_accessible_surface(densMap,prot,aa1_CA, aa2_CA):
         sphere[r] = []
         rad = int(round(radius[r]/densMap.apix))
         
-        for x in xrange(-rad,rad+1):
-            for y in xrange(-rad,rad+1):
-                for z in xrange(-rad,rad+1):
+        for x in range(-rad,rad+1):
+            for y in range(-rad,rad+1):
+                for z in range(-rad,rad+1):
                     if (x**2 + y**2 + z**2) <= (rad**2):
                         sphere[r].append([x,y,z])
         
@@ -450,45 +450,45 @@ def find_surface_voxels(aa1_CA, densMap, surface, xl_list = []):
     radius5 = radius4 + 1
     radius6 = radius5 + 1
     
-    for x in xrange(-radius1,radius1+1):
-        for y in xrange(-radius1,radius1+1):
-            for z in xrange(-radius1,radius1+1):
+    for x in range(-radius1,radius1+1):
+        for y in range(-radius1,radius1+1):
+            for z in range(-radius1,radius1+1):
                 if (x**2 + y**2 + z**2) <= (radius1**2):
                     sphere1.append([x,y,z])
                     
-    for x in xrange(-radius2,radius2+1):
-        for y in xrange(-radius2,radius2+1):
-            for z in xrange(-radius2,radius2+1):
+    for x in range(-radius2,radius2+1):
+        for y in range(-radius2,radius2+1):
+            for z in range(-radius2,radius2+1):
                 if (x**2 + y**2 + z**2) <= (radius2**2):
                     if ([x,y,z]) not in sphere1:
                         sphere2.append([x,y,z])
                     
-    for x in xrange(-radius3,radius3+1):
-        for y in xrange(-radius3,radius3+1):
-            for z in xrange(-radius3,radius3+1):
+    for x in range(-radius3,radius3+1):
+        for y in range(-radius3,radius3+1):
+            for z in range(-radius3,radius3+1):
                 if (x**2 + y**2 + z**2) <= (radius3**2):
                     if ([x,y,z]) not in sphere1 and ([x,y,z]) not in sphere2:
                         sphere3.append([x,y,z])
                                     
-    for x in xrange(-radius4,radius4+1):
-        for y in xrange(-radius4,radius4+1):
-            for z in xrange(-radius4,radius4+1):
+    for x in range(-radius4,radius4+1):
+        for y in range(-radius4,radius4+1):
+            for z in range(-radius4,radius4+1):
                 if (x**2 + y**2 + z**2) <= (radius4**2):
                     if ([x,y,z]) not in sphere1 and ([x,y,z]) not in sphere2 and (
                     [x,y,z]) not in sphere3:
                         sphere4.append([x,y,z])
     
-    for x in xrange(-radius5,radius5+1):
-        for y in xrange(-radius5,radius5+1):
-            for z in xrange(-radius5,radius5+1):
+    for x in range(-radius5,radius5+1):
+        for y in range(-radius5,radius5+1):
+            for z in range(-radius5,radius5+1):
                 if (x**2 + y**2 + z**2) <= (radius5**2):
                     if ([x,y,z]) not in sphere1 and ([x,y,z]) not in sphere2 and (
                     [x,y,z]) not in sphere3 and ([x,y,z]) not in sphere4:
                         sphere5.append([x,y,z])
                         
-    for x in xrange(-radius6,radius6+1):
-        for y in xrange(-radius6,radius6+1):
-            for z in xrange(-radius6,radius6+1):
+    for x in range(-radius6,radius6+1):
+        for y in range(-radius6,radius6+1):
+            for z in range(-radius6,radius6+1):
                 if (x**2 + y**2 + z**2) <= (radius6**2):
                     if ([x,y,z]) not in sphere1 and ([x,y,z]) not in sphere2 and (
                     [x,y,z]) not in sphere3 and ([x,y,z]) not in sphere4 and ([x,y,z]) not in sphere5:
@@ -526,9 +526,9 @@ def find_surface_voxels(aa1_CA, densMap, surface, xl_list = []):
     rem_x = []
     
     if len(buried) > 0 and len(xl_list) > 0:
-        print "ERROR - ",k_buried," buried residue(s) in xl_list:"
+        print("ERROR - ",k_buried," buried residue(s) in xl_list:")
         for t in buried:
-            print str(t[0])+"-"+str(t[1])+"-"+str(t[2])
+            print(str(t[0])+"-"+str(t[1])+"-"+str(t[2]))
             rem_x.append([t[0],t[1]])
         #sys.exit(2)
     

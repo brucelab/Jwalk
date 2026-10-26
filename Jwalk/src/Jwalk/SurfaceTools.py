@@ -157,9 +157,9 @@ def check_solvent_accessibility(prot,aa1_CA,xl_list = False):
     if xl_list:
         pass
     elif sd_res == "LYS":
-        print "%d %s and 1 N-terminus of which %d are on the surface" % (len(aa1_CA)-1,string_dict[sd_res], len(SA_res))                
+        print("%d %s and 1 N-terminus of which %d are on the surface" % (len(aa1_CA)-1,string_dict[sd_res], len(SA_res)))                
     else:            
-        print "%d %s of which %d are on the surface" % (len(aa1_CA),string_dict[sd_res], len(SA_res))
+        print("%d %s of which %d are on the surface" % (len(aa1_CA),string_dict[sd_res], len(SA_res)))
             
     return SA_res   
     
@@ -170,7 +170,7 @@ def update_crosslink_pairs(crosslink_pairs, aa1_CA, aa2_CA, remove_aa1, remove_a
     buried_residues = []
     index_to_delete = []
     
-    for i in xrange(len(crosslink_pairs)): # for each residue pair, check both are solvent accessible
+    for i in range(len(crosslink_pairs)): # for each residue pair, check both are solvent accessible
         
         x1, x2 = crosslink_pairs[i]
         
@@ -199,16 +199,16 @@ def update_crosslink_pairs(crosslink_pairs, aa1_CA, aa2_CA, remove_aa1, remove_a
     
     no_sasd_possible = []
     crosslink_pairs_final = []
-    for i in xrange(len(crosslink_pairs)):
+    for i in range(len(crosslink_pairs)):
         if i not in index_to_delete:
             crosslink_pairs_final.append(crosslink_pairs[i])
         else:
             no_sasd_possible.append(crosslink_pairs[i])
     
     if len(no_sasd_possible) > 0:
-        print "the following crosslinks cannot be calculated:"
+        print("the following crosslinks cannot be calculated:")
         for s in no_sasd_possible:
-            print "%s-%s-%s - %s-%s-%s" % (s[0][2],s[0][0],s[0][1],s[1][2],s[1][0],s[1][1])
+            print("%s-%s-%s - %s-%s-%s" % (s[0][2],s[0][0],s[0][1],s[1][2],s[1][0],s[1][1]))
                     
     return crosslink_pairs_final
     
@@ -246,7 +246,7 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
         test_open = open(prot[:-4]+".rsa")
         test_open.close
     except:
-        print "No .rsa file created. Please check you have Freesasa installed. Go to 'http://freesasa.github.io/' "
+        print("No .rsa file created. Please check you have Freesasa installed. Go to 'http://freesasa.github.io/' ")
         exit(1)
         
     #try:
@@ -274,16 +274,16 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
             SA_res_dict[(s[0],s[1],s[2])] = aa1_CA[(s[0],s[1],s[2])]
             sd_res = s[2]
         else:
-            print "Residue %d-%s-%s is buried" % (s[0],s[1],s[2])
+            print("Residue %d-%s-%s is buried" % (s[0],s[1],s[2]))
             sd_res = s[2]
     
     # inform user on buried resiudes
     if xl_list:
         pass
     elif sd_res == "LYS":
-        print "%d %s and 1 N-terminus of which %d are on the surface" % (len(aa1_CA)-1,string_dict[sd_res], len(SA_res_dict))                
+        print("%d %s and 1 N-terminus of which %d are on the surface" % (len(aa1_CA)-1,string_dict[sd_res], len(SA_res_dict)))                
     else:            
-        print "%d %s of which %d are on the surface" % (len(aa1_CA),string_dict[sd_res], len(SA_res_dict))
+        print("%d %s of which %d are on the surface" % (len(aa1_CA),string_dict[sd_res], len(SA_res_dict)))
             
     return SA_res_dict
     

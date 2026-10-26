@@ -172,14 +172,14 @@ REMARK    MODEL GENERATE WITH TEMPY
             g.write(line)
             #last_prot_num+=1
 
-        print last_prot_num
+        print(last_prot_num)
         if hetatom==True:
             hetstr=BioPy_Structure(hetatmlist)
             hetchain=hetstr.split_into_chains()
             for chain in range(len(hetchain)):
                 if chain==0:
                 #hetchain[chain].renumber_atoms()
-                    print last_prot_num
+                    print(last_prot_num)
                     hetchain[chain].renumber_atoms(start_num=last_prot_num+2)
 
                 else:

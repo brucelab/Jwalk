@@ -387,7 +387,7 @@ def parallel_BFS(aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA, crosslink_pai
         if ncpus > 1:
             pool = Pool(ncpus)
             xl_dictionaries = pool.map(calculate_specific_SASD_star,
-                                       itertools.izip(crosslink_pairs,
+                                       zip(crosslink_pairs,
                                        itertools.repeat(aa1_voxels),
                                        itertools.repeat(aa2_voxels),
                                        itertools.repeat(dens_map),
@@ -412,7 +412,7 @@ def parallel_BFS(aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA, crosslink_pai
             
             pool = Pool(ncpus)
             xl_dictionaries = pool.map(calculate_SASDs_star, 
-                                       itertools.izip(aa1_voxels,
+                                       zip(aa1_voxels,
                                        itertools.repeat(aa1_voxels),
                                        itertools.repeat(aa2_voxels),
                                        itertools.repeat(dens_map),
@@ -452,8 +452,8 @@ def get_euclidean_distances(sasds, pdb, aa1, aa2):
                 float(line[38:46].strip()),
                 float(line[46:54].strip())]
     
-    for k,v in residues.iteritems():
-        for k1,v1 in residues.iteritems():
+    for k,v in residues.items():
+        for k1,v1 in residues.items():
             if k1 != k:
             
                 euc_dists[int(k[0]),k[1], int(k1[0]),k1[1]] = calculate_distance([v,v1])

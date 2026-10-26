@@ -1,8 +1,10 @@
+#!/usr/bin/python3.8
+
 import sys, os,shutil
 from distutils.core import setup
 
 if os.path.exists('build')==True:
-	print "build exists"
+	print ("build exists")
 	shutil.rmtree('./build')
 
 try:
@@ -33,9 +35,9 @@ if [int(dgt) for dgt in Bio.__version__.split('.')[:2]] < [1, 5]:
 
 # Make sure I have the right Python version.
 if sys.version_info[:2] < (2, 5):
-    print "JWalk requires Python 2.5 or better. Python %d.%d detected" % \
-        sys.version_info[:2]
-    print "Please upgrade your version of Python."
+    print ("JWalk requires Python 2.5 or better. Python %d.%d detected" % \
+        sys.version_info[:2])
+    print ("Please upgrade your version of Python.")
     sys.exit(-1)
 
 
