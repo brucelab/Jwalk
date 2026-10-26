@@ -23,7 +23,6 @@
 from array import array
 import numpy as np
 from multiprocessing import Pool, Process, freeze_support
-import itertools
 import sys
 import math
 import os
@@ -231,7 +230,7 @@ def shortest_path(start_residue, end_residue, end_voxels, search, grid, aa1_CA, 
     return shortest_distance, path
 
 def calculate_specific_SASD(single_crosslink, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA,
-                            max_dist, vox):
+                            max_dist, vox, grid=None):
 
     '''
 
@@ -263,6 +262,8 @@ def calculate_specific_SASD(single_crosslink, aa1_voxels, aa2_voxels, dens_map, 
            maximum distance BFS will search until
        *vox*
            number of angstoms per voxel
+       *grid*
+           output of prepare_grid, made from dens_map and vox if not given
 
     '''
 
@@ -271,7 +272,8 @@ def calculate_specific_SASD(single_crosslink, aa1_voxels, aa2_voxels, dens_map, 
 
     specific_xl = {}
 
-    grid = prepare_grid(dens_map, vox)
+    if grid is None:
+        grid = prepare_grid(dens_map, vox)
     search = breadth_first_search(aa1_voxels[start_residue], grid, max_dist)
 
     # now we have a full set of paths into empty space starting from start_residue
@@ -287,7 +289,7 @@ def calculate_specific_SASD(single_crosslink, aa1_voxels, aa2_voxels, dens_map, 
 
 
 def calculate_SASDs(start_residue, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA,
-                    max_dist, vox):
+                    max_dist, vox, grid=None):
 
     """
 
@@ -318,13 +320,16 @@ def calculate_SASDs(start_residue, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2
            maximum distance BFS will search until
        *vox*
            number of angstoms per voxel
+       *grid*
+           output of prepare_grid, made from dens_map and vox if not given
 
 
     """
 
     sasds = {}
 
-    grid = prepare_grid(dens_map, vox)
+    if grid is None:
+        grid = prepare_grid(dens_map, vox)
     search = breadth_first_search(aa1_voxels[start_residue], grid, max_dist)
 
     # now we have a full set of paths into empty space starting from start_residue
@@ -351,13 +356,25 @@ def calculate_SASDs(start_residue, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2
 
     return sasds
 
-def calculate_SASDs_star(a_b):
-    """Convert `f([1,2])` to `f(1,2)` call."""
-    return calculate_SASDs(*a_b)
-    
-def calculate_specific_SASD_star(a_b):
-    """Convert `f([1,2])` to `f(1,2)` call."""
-    return calculate_specific_SASD(*a_b)
+# data shared by every task, set once per worker process so it is not pickled with each task
+shared = {}
+
+def init_worker(grid, aa1_voxels, aa2_voxels, aa1_CA, aa2_CA, max_dist):
+    """Store the data shared by every task in the worker process."""
+    shared.update(grid=grid, aa1_voxels=aa1_voxels, aa2_voxels=aa2_voxels, aa1_CA=aa1_CA,
+                  aa2_CA=aa2_CA, max_dist=max_dist)
+
+def calculate_SASDs_task(start_residue):
+    """Run calculate_SASDs for one start residue using the shared data."""
+    return calculate_SASDs(start_residue, shared['aa1_voxels'], shared['aa2_voxels'], None,
+                           shared['aa1_CA'], shared['aa2_CA'], shared['max_dist'], None,
+                           grid=shared['grid'])
+
+def calculate_specific_SASD_task(single_crosslink):
+    """Run calculate_specific_SASD for one crosslink using the shared data."""
+    return calculate_specific_SASD(single_crosslink, shared['aa1_voxels'], shared['aa2_voxels'],
+                                   None, shared['aa1_CA'], shared['aa2_CA'], shared['max_dist'],
+                                   None, grid=shared['grid'])
 
 def parallel_BFS(aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA, crosslink_pairs,
                  max_dist, vox, ncpus, xl_list):
@@ -397,54 +414,30 @@ def parallel_BFS(aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA, crosslink_pai
     
     freeze_support()
     final_XL = {}
-    
-    if xl_list:
-        if ncpus > 1:
-            pool = Pool(ncpus)
-            xl_dictionaries = pool.map(calculate_specific_SASD_star,
-                                       zip(crosslink_pairs,
-                                       itertools.repeat(aa1_voxels),
-                                       itertools.repeat(aa2_voxels),
-                                       itertools.repeat(dens_map),
-                                       itertools.repeat(aa1_CA),
-                                       itertools.repeat(aa2_CA),
-                                       itertools.repeat(max_dist),
-                                       itertools.repeat(vox)))
-                                       
-            for c in xl_dictionaries:
-                final_XL.update(c)
 
-        else:
-            # alternative call to allow single cpu running on Windows machines
-            for single_crosslink in crosslink_pairs:
-                xl_dictionaries = calculate_specific_SASD(single_crosslink, aa1_voxels,
-                                                          aa2_voxels, dens_map, aa1_CA, aa2_CA,
-                                                          max_dist, vox)
-                final_XL.update(xl_dictionaries)
+    # the grid is flattened once and shared by every search
+    grid = prepare_grid(dens_map, vox)
+    initargs = (grid, aa1_voxels, aa2_voxels, aa1_CA, aa2_CA, max_dist)
+
+    if xl_list:
+        task = calculate_specific_SASD_task
+        residues = crosslink_pairs
+    else:
+        task = calculate_SASDs_task
+        residues = list(aa1_voxels)
+
+    if ncpus > 1:
+        # results come back in the order of residues so the output order doesn't depend on timing
+        with Pool(ncpus, init_worker, initargs) as pool:
+            xl_dictionaries = list(pool.imap(task, residues, chunksize=1))
 
     else:
-        if ncpus > 1:
-            
-            pool = Pool(ncpus)
-            xl_dictionaries = pool.map(calculate_SASDs_star, 
-                                       zip(aa1_voxels,
-                                       itertools.repeat(aa1_voxels),
-                                       itertools.repeat(aa2_voxels),
-                                       itertools.repeat(dens_map),
-                                       itertools.repeat(aa1_CA),
-                                       itertools.repeat(aa2_CA),
-                                       itertools.repeat(max_dist),
-                                       itertools.repeat(vox)))
-            
-            for c in xl_dictionaries:
-                final_XL.update(c)
+        # alternative call to allow single cpu running on Windows machines
+        init_worker(*initargs)
+        xl_dictionaries = [task(residue) for residue in residues]
 
-        else:
-            # alternative call to allow single cpu running on Windows machines
-            for start_residue in aa1_voxels:
-                xl_dictionaries = calculate_SASDs(start_residue, aa1_voxels, aa2_voxels,
-                                                  dens_map, aa1_CA, aa2_CA, max_dist, vox)
-                final_XL.update(xl_dictionaries)
+    for c in xl_dictionaries:
+        final_XL.update(c)
 
     return final_XL
 
