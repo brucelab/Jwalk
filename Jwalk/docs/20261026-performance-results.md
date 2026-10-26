@@ -68,6 +68,37 @@ Changed distances were always shorter than the original value. The duplicated C-
 * Steps 2-9 were additionally compared **byte for byte** with the previous step. Step 1 is the reference; see above for why it differs from the original.
 * Steps 6-9 touch code that the large cases only partly exercise, so they were also checked directly against the previous version: the solvent accessible grid is exactly equal element for element (step 7); `mark_CAlphas_pairs` on three crosslink lists including bad residues, `find_surface_voxels` at five voxel sizes with and without `surface`, and 200 random `update_crosslink_pairs` cases give identical return values and identical printed text (step 8); the written path file is identical (step 9).
 
+## Fixes made after the optimization steps
+
+Checking the finished work for problems turned up one regression introduced by the optimization (memory) and three crashes in the original code. Each was fixed in its own commit, after the nine steps above, and each was checked by re-running all test cases (byte-identical output to the previous commit) plus a test aimed at the fix. The timings above were not re-measured after these commits; one run of the large benchmark afterwards was within the noise of the step 9 figures.
+
+| Commit | Problem | Fix | Specific test |
+|---|---|---|---|
+| `6e30983` | **Memory (a regression from step 4).** The NumPy BFS held about 25 bytes per voxel over the whole padded grid, for every search in every worker: 640 MB per worker at 300^3 voxels and 1.4 GB at 400^3, and its `int32` indices would overflow beyond about 1290^3. | A search can't get further than `max_dist / vox` voxels (plus the step that finds a voxel) from its start voxels, so only that window of the grid is held. End voxels outside the window can't have been reached. Indices switch to `int64` if a window ever exceeded `int32`. Peak memory for one search from the centre: 300^3 640 MB -> 131 MB, 400^3 1370 MB -> 164 MB. | 4 new cases with a small `-max_dist` (window smaller than the grid); 600 random searches compared voxel by voxel (visited, distance, parent, root) with the previous implementation, 444 with a window smaller than the grid. The old search never reached a voxel outside the new window. |
+| `6222180` | **`-i dir/file.pdb` crashed** with `FileNotFoundError` after the whole calculation, because output names were built with `pdb[:-4]`, which keeps the directory. | Name the outputs from the base name without extension. They still go in `./Jwalk_results`. | Relative and absolute input paths give the same results as running in the file's directory. |
+| `64f8e06` | **A blank line in the `-xl_list` file** was reported as a formatting error and aborted the run. | Skip blank and whitespace-only lines; the line counter still counts them, so real errors report the right line. | A list with blank, space-only and tab-only lines gives byte-identical results to the clean list; a malformed line still stops at the right line number. |
+| `a7cf7ec` | **`-vox 0.5` crashed** with a `ValueError` traceback and `-vox 0` would divide by zero. | `-vox`, `-max_dist` and `-ncpus` are `type=int` in argparse, so a bad value gives a usage error (exit status 2); a voxel size below 1 is rejected. | Six bad values rejected, two valid ones still run. |
+
+Two behaviours to be aware of: because outputs are named from the file's base name, two inputs with the same file name in different directories now write to the same result files; and voxel size is still whole numbers only (decimal sizes were not tested through the rest of the code, so they are rejected rather than accepted).
+
+### Dead code removed in step 8
+
+In `SurfaceTools.update_crosslink_pairs` a `buried_residues` list was appended to but never read. One of its checks (`x2 in remove_aa2`) compared a 3-tuple with a list of 2-lists and could never be true. It was removed with the set conversion in commit `4a1efe5`; the function was compared with the old version on 200 random inputs, including the text it prints.
+
+### Known issues not fixed
+
+Verified by running them:
+
+* A non-numeric residue number in the `-xl_list` file (for example `21|A|oops|A|`) still stops with a raw `ValueError` traceback instead of the formatting message.
+* `PDBTools.calculate_centre_of_mass` raises `UnboundLocalError` for a structure with no atoms (the divisions are also inside the loop). Nothing in `jwalk` uses the result.
+* `GridTools.mapGridPosition` returns `0` for an atom outside the grid and `markCAlphas` then fails with `TypeError`. The grid is built around the structure, so this was only reproduced by moving the grid origin.
+
+Found by reading the code only (not run, since freesasa is not installed here, or not tested):
+
+* The `-surface` message prints `len(aa1_CA)-1` lysines "and 1 N-terminus", but nothing in the code adds an N-terminus, so the lysine count shown is one too low.
+* `check_solvent_accessibility_freesasa` has `test_open.close` without parentheses (the file is not explicitly closed) and `sd_res` is unbound if the residue list is empty.
+* Residues are keyed by number and chain, ignoring insertion codes, in `GridTools` and `get_euclidean_distances`; `get_euclidean_distances` reads every model of an NMR file while Biopython reads only the first.
+
 ## Caveats
 
 * **Shared machine.** The server had a load average of about 10-12 during the final measurement, and earlier in the session the same code varied by up to 1.5x between runs (the original benchmark ranged from 34 s to 78 s wall). CPU time is steadier than wall time but not immune. Treat the ratios as indicative; the ordering of the steps is reliable, the exact factors are not.
