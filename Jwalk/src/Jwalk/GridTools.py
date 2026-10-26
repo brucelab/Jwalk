@@ -253,46 +253,40 @@ def mark_CAlphas_pairs(densMap, prot, uv_xl):
     aa1_CA = OrderedDict()
     aa2_CA = OrderedDict()
 
-    atom_check = []
+    # sets, so checking each atom against the residues in the list is quick
+    aa1_set = set((x[0], x[1]) for x in aa1)
+    aa2_set = set((x[0], x[1]) for x in aa2)
+    atom_check = set()
     
     for atom in prot.atomList:    
-        if [atom.res_no,atom.chain] in aa1:
+        if (atom.res_no,atom.chain) in aa1_set:
             if atom.atom_name == "CA":
                 pos = mapGridPosition(densMap, atom)
                 aa1_CA[atom.res_no,atom.chain,atom.res]=[pos[0],pos[1],pos[2]]
-                atom_check.append([atom.res_no,atom.chain])
-        if [atom.res_no,atom.chain] in aa2:
+                atom_check.add((atom.res_no,atom.chain))
+        if (atom.res_no,atom.chain) in aa2_set:
             if atom.atom_name == "CA":
                 pos = mapGridPosition(densMap, atom)
                 aa2_CA[atom.res_no,atom.chain,atom.res]=[pos[0],pos[1],pos[2]]
-                atom_check.append([atom.res_no,atom.chain])
+                atom_check.add((atom.res_no,atom.chain))
     
     # check that all the residues listed are in the structure
-    rem_x = []
+    rem_x = set()
     
     for x in aa1:
-        if x not in atom_check:
+        if (x[0], x[1]) not in atom_check:
             print("ERROR ! Residue",x[0],"-",x[1], "not in pdb structure - please check input files")
-            rem_x.append((x[0], x[1]))
+            rem_x.add((x[0], x[1]))
     for x in aa2:
-        if x not in atom_check:
+        if (x[0], x[1]) not in atom_check:
             print("ERROR ! Residue",x[0],"-",x[1], "not in pdb structure - please check input files")
-            rem_x.append((x[0], x[1]))
+            rem_x.add((x[0], x[1]))
         
     # remove crosslinks from crosslink_pairs if one or both residues are not in structure
-    index_to_delete = []
-    
-    for i in range(len(crosslink_pairs)):
-        [x1, x2] = crosslink_pairs[i]
-        if x1 in rem_x:
-            index_to_delete.append(i)
-        elif x2 in rem_x:
-            index_to_delete.append(i)
-    
     crosslink_pairs_hold = []
-    for i in range(len(crosslink_pairs)):
-        if i not in index_to_delete:
-            crosslink_pairs_hold.append(crosslink_pairs[i])
+    for x1, x2 in crosslink_pairs:
+        if x1 not in rem_x and x2 not in rem_x:
+            crosslink_pairs_hold.append([x1, x2])
             
     # append residue name to crosslink_pairs_final
     
@@ -441,13 +435,6 @@ def find_surface_voxels(aa1_CA, densMap, surface, xl_list = []):
     # generate voxel spheres shells to progressively extend search for starting voxels
     # this is to keep starting voxels as close to CA as possible.    
     
-    sphere1 = []
-    sphere2 = []
-    sphere3 = []
-    sphere4 = []
-    sphere5 = []
-    sphere6 = []
-    
     C = 1.68
     
     radius = 1.73 + C
@@ -459,49 +446,22 @@ def find_surface_voxels(aa1_CA, densMap, surface, xl_list = []):
     radius5 = radius4 + 1
     radius6 = radius5 + 1
     
-    for x in range(-radius1,radius1+1):
-        for y in range(-radius1,radius1+1):
-            for z in range(-radius1,radius1+1):
-                if (x**2 + y**2 + z**2) <= (radius1**2):
-                    sphere1.append([x,y,z])
-                    
-    for x in range(-radius2,radius2+1):
-        for y in range(-radius2,radius2+1):
-            for z in range(-radius2,radius2+1):
-                if (x**2 + y**2 + z**2) <= (radius2**2):
-                    if ([x,y,z]) not in sphere1:
-                        sphere2.append([x,y,z])
-                    
-    for x in range(-radius3,radius3+1):
-        for y in range(-radius3,radius3+1):
-            for z in range(-radius3,radius3+1):
-                if (x**2 + y**2 + z**2) <= (radius3**2):
-                    if ([x,y,z]) not in sphere1 and ([x,y,z]) not in sphere2:
-                        sphere3.append([x,y,z])
-                                    
-    for x in range(-radius4,radius4+1):
-        for y in range(-radius4,radius4+1):
-            for z in range(-radius4,radius4+1):
-                if (x**2 + y**2 + z**2) <= (radius4**2):
-                    if ([x,y,z]) not in sphere1 and ([x,y,z]) not in sphere2 and (
-                    [x,y,z]) not in sphere3:
-                        sphere4.append([x,y,z])
+    # each shell holds the voxels of a sphere that are not in a smaller one
+    shells = []
+    seen = set()
     
-    for x in range(-radius5,radius5+1):
-        for y in range(-radius5,radius5+1):
-            for z in range(-radius5,radius5+1):
-                if (x**2 + y**2 + z**2) <= (radius5**2):
-                    if ([x,y,z]) not in sphere1 and ([x,y,z]) not in sphere2 and (
-                    [x,y,z]) not in sphere3 and ([x,y,z]) not in sphere4:
-                        sphere5.append([x,y,z])
-                        
-    for x in range(-radius6,radius6+1):
-        for y in range(-radius6,radius6+1):
-            for z in range(-radius6,radius6+1):
-                if (x**2 + y**2 + z**2) <= (radius6**2):
-                    if ([x,y,z]) not in sphere1 and ([x,y,z]) not in sphere2 and (
-                    [x,y,z]) not in sphere3 and ([x,y,z]) not in sphere4 and ([x,y,z]) not in sphere5:
-                        sphere6.append([x,y,z])
+    for r in (radius1, radius2, radius3, radius4, radius5, radius6):
+        shell = []
+        for x in range(-r,r+1):
+            for y in range(-r,r+1):
+                for z in range(-r,r+1):
+                    if (x**2 + y**2 + z**2) <= (r**2):
+                        if (x,y,z) not in seen:
+                            shell.append([x,y,z])
+        seen.update(tuple(v) for v in shell)
+        shells.append(shell)
+    
+    sphere1, sphere2, sphere3, sphere4, sphere5, sphere6 = shells
     
     # iterate through sphere shells and append starting voxels to dictionary
                     

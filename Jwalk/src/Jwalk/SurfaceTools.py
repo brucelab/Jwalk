@@ -167,35 +167,25 @@ def update_crosslink_pairs(crosslink_pairs, aa1_CA, aa2_CA, remove_aa1, remove_a
     
     '''Removes buried residues from crosslink_pairs'''
     
-    buried_residues = []
-    index_to_delete = []
+    index_to_delete = set()
+    
+    # sets, so checking each residue pair against the residues to remove is quick
+    remove_aa1_set = set((x[0], x[1]) for x in remove_aa1)
+    remove_aa2_set = set((x[0], x[1]) for x in remove_aa2)
     
     for i in range(len(crosslink_pairs)): # for each residue pair, check both are solvent accessible
         
         x1, x2 = crosslink_pairs[i]
         
         if x1 not in aa1_CA:
-            index_to_delete.append(i)
-            if x1 not in buried_residues:
-                buried_residues.append(x1)
-            if x2 not in aa2_CA and x2 not in buried_residues:
-                buried_residues.append(x2)
+            index_to_delete.add(i)
         elif x2 not in aa2_CA:
-            index_to_delete.append(i)
-            if x2 not in buried_residues:  
-                buried_residues.append(x2)
+            index_to_delete.add(i)
                 
-        if [x1[0],x1[1]] in remove_aa1:
-            index_to_delete.append(i)
-            if x1 not in buried_residues:
-                buried_residues.append(x1)
-            if x2 in remove_aa2 and not x2 in buried_residues:
-                buried_residues.append(x2)
-        
-        elif [x2[0],x2[1]] in remove_aa2:        
-            index_to_delete.append(i)
-            if x2 not in buried_residues:
-                buried_residues.append(x2)
+        if (x1[0],x1[1]) in remove_aa1_set:
+            index_to_delete.add(i)
+        elif (x2[0],x2[1]) in remove_aa2_set:        
+            index_to_delete.add(i)
     
     no_sasd_possible = []
     crosslink_pairs_final = []
