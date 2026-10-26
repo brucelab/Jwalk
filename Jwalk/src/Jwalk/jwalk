@@ -73,16 +73,19 @@ parser.add_argument('-aa1', nargs=1,
 					help='specify start amino acid (three letter code e.g. LYS)')
 parser.add_argument('-aa2', nargs=1,
 					help='specify end amino acid (three letter code e.g. LYS)')
-parser.add_argument('-max_dist', nargs=1,
+parser.add_argument('-max_dist', nargs=1, type=int,
 					help='specify maximum crosslink distance in Angstroms')
-parser.add_argument('-vox', nargs=1,
-					help='specify voxel size of grid')
+parser.add_argument('-vox', nargs=1, type=int,
+					help='specify voxel size of grid in Angstroms (a whole number)')
 parser.add_argument('-surface', action="store_true",
 					help='use higher accuracy method to calculate solvent accessibility - requires Freesasa installation')
-parser.add_argument('-ncpus', nargs=1,
+parser.add_argument('-ncpus', nargs=1, type=int,
 					help='specify number of cpus to use')
 
 args = parser.parse_args()
+
+if args.vox and args.vox[0] < 1:
+	parser.error('argument -vox: voxel size must be a whole number of at least 1')
 
 if args.lys:
 	aa1 = "LYS"
