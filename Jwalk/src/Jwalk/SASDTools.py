@@ -64,8 +64,9 @@ def prepare_grid(dens_map, vox):
     marked as already visited, so the neighbours of a voxel sit at fixed offsets in the
     flat index and no bounds checks are needed.
 
-    Returns (visited template, occupied voxels, y stride, x stride, steps) where steps is
-    a list of (flat index offset, distance travelled) for each of the 26 neighbours.
+    Returns (visited template, occupied voxels, y stride, x stride, offsets, costs) where
+    offsets and costs give the flat index offset and the distance travelled for each of the
+    26 neighbours, in the order of COMB.
 
     Arguments:
 
@@ -90,12 +91,15 @@ def prepare_grid(dens_map, vox):
     diag2 = (math.sqrt((vox ** 2) * 3)) # 3d diagonal
     cost = {1: vox, 2: diag1, 3: diag2}
 
-    steps = []
+    offsets = []
+    costs = []
     for (dx, dy, dz) in COMB:
         n_axes = (dx != 0) + (dy != 0) + (dz != 0)
-        steps.append(((dz * sy + dy) * sx + dx, cost[n_axes]))
+        offsets.append((dz * sy + dy) * sx + dx)
+        costs.append(cost[n_axes])
 
-    return bytearray(visited.tobytes()), bytearray(occupied.tobytes()), sy, sx, steps
+    return (visited.ravel(), occupied.ravel(), sy, sx, np.array(offsets, dtype=np.int64),
+            np.array(costs, dtype=np.float64))
 
 def prepare_targets(voxel_lists, grid):
 
@@ -114,18 +118,14 @@ def prepare_targets(voxel_lists, grid):
 
     '''
 
-    visited_template, occupied, sy, sx, steps = grid
+    visited_template, occupied, sy, sx = grid[:4]
 
-    flags = bytearray(len(visited_template))
-    count = 0
+    flags = np.zeros(len(visited_template), dtype=np.uint8)
     for voxels in voxel_lists:
         for (x, y, z) in voxels:
-            p = ((z + 1) * sy + (y + 1)) * sx + (x + 1)
-            if not flags[p]:
-                flags[p] = 1
-                count += 1
+            flags[((z + 1) * sy + (y + 1)) * sx + (x + 1)] = 1
 
-    return flags, count
+    return flags, int(flags.sum())
 
 def breadth_first_search(start_voxels, grid, max_dist, targets=None):
 
@@ -133,6 +133,11 @@ def breadth_first_search(start_voxels, grid, max_dist, targets=None):
 
     Breadth First Search of grid from a set of starting voxels. For general info on
     algorithm see: https://en.wikipedia.org/wiki/Breadth-first_search
+
+    The search goes a level at a time. Candidate voxels are laid out in the order a queue would
+    reach them (each voxel in the level, then each of its neighbours in the order of COMB) and
+    the first time a voxel appears wins, so the paths and distances found are the same as for a
+    voxel at a time search with a queue.
 
     Returns (visited, parent, root, distance) as flat arrays indexed like the grid made by
     prepare_grid. parent is the previous voxel on the path (-1 for a starting voxel), root
@@ -153,56 +158,62 @@ def breadth_first_search(start_voxels, grid, max_dist, targets=None):
 
     '''
 
-    visited_template, occupied, sy, sx, steps = grid
+    visited_template, occupied, sy, sx, offsets, costs = grid
+    n_moves = len(offsets)
 
-    visited = bytearray(visited_template) # voxels that have been searched
+    visited = visited_template.copy() # voxels that have been searched
     n = len(visited)
-    parent = array('i', [-1]) * n # voxel the path to this voxel came from
-    root = array('i', [-1]) * n # starting voxel of the path to this voxel
-    distance = array('d', [0.0]) * n # distance from starting voxel for each other voxel
+    parent = np.full(n, -1, dtype=np.int32) # voxel the path to this voxel came from
+    root = np.full(n, -1, dtype=np.int32) # starting voxel of the path to this voxel
+    distance = np.zeros(n, dtype=np.float64) # distance from starting voxel for each other voxel
 
-    if targets is None:
-        target = bytearray(n)
-        remaining = -1 # never reaches 0 so the search is not cut short
-    else:
-        target = bytearray(targets[0]) # target voxels that have not been reached yet
-        remaining = targets[1]
+    # place starting voxels into the first level and initialise visited and root
+    level = np.array([((z + 1) * sy + (y + 1)) * sx + (x + 1) for (x, y, z) in start_voxels],
+                     dtype=np.int64)
+    visited[level] = 1
+    root[level] = level
 
-    # place starting voxels into queue and initialise visited and root
-    queue = []
-    for (x, y, z) in start_voxels:
-        p = ((z + 1) * sy + (y + 1)) * sx + (x + 1)
-        visited[p] = 1
-        root[p] = p
-        queue.append(p)
-        if target[p]:
-            target[p] = 0
-            remaining -= 1
+    if targets is not None:
+        flags, remaining = targets
+        remaining -= int(flags[np.unique(level)].sum())
+        if remaining <= 0:
+            return visited, parent, root, distance
 
-    if remaining == 0:
-        return visited, parent, root, distance
+    # grid is searched until there are no more voxels to search from
+    while len(level):
 
-    # grid is searched until queue is empty
-    head = 0
-    while head < len(queue):
-        p = queue[head] # take first voxel in queue
-        head += 1
-        d = distance[p]
-        if d <= max_dist:
-            for (offset, step) in steps: # expand in all directions from voxel - in order of COMB.
-                q = p + offset
-                # check voxel hasn't already been searched (the border counts as searched)
-                if not visited[q]:
-                    visited[q] = 1
-                    parent[q] = p
-                    root[q] = root[p]
-                    distance[q] = d + step
-                    if target[q]: # stop once every target voxel has been reached
-                        remaining -= 1
-                        if remaining == 0:
-                            return visited, parent, root, distance
-                    if not occupied[q]: # if the voxel is in empty space
-                        queue.append(q) # add to queue for later searching
+        # voxels further than max_dist are not searched from
+        level = level[distance[level] <= max_dist]
+        if len(level) == 0:
+            break
+
+        # expand in all directions from every voxel in the level - in order of COMB.
+        candidates = (level[:, None] + offsets).ravel()
+
+        # check voxel hasn't already been searched (the border counts as searched)
+        unsearched = np.flatnonzero(visited[candidates] == 0)
+        if len(unsearched) == 0:
+            break
+
+        # a voxel reached more than once belongs to the first path that reaches it
+        found = candidates[unsearched]
+        first = np.unique(found, return_index=True)[1]
+        first.sort()
+        new = found[first]
+        source = unsearched[first]
+        previous = level[source // n_moves]
+
+        visited[new] = 1
+        parent[new] = previous
+        root[new] = root[previous]
+        distance[new] = distance[previous] + costs[source % n_moves]
+
+        if targets is not None: # stop once every target voxel has been reached
+            remaining -= int(flags[new].sum())
+            if remaining <= 0:
+                break
+
+        level = new[occupied[new] == 0] # if the voxel is in empty space it is searched from
 
     return visited, parent, root, distance
 
@@ -254,10 +265,10 @@ def shortest_path(start_residue, end_residue, end_voxels, search, grid, aa1_CA, 
 
         if visited[p]:
 
-            (x_s, y_s, z_s) = unflatten(root[p])
+            (x_s, y_s, z_s) = unflatten(int(root[p]))
 
             # add the distance between starting/ending residue CA voxel and start/end voxel in path
-            d = distance[p]
+            d = float(distance[p])
             d += math.sqrt((x_1 - x_s) ** 2 + (y_1 - y_s) ** 2 + (z_1 - z_s) ** 2)
             d += math.sqrt((x - x_2) ** 2 + (y - y_2) ** 2 + (z - z_2) ** 2)
 
@@ -274,7 +285,7 @@ def shortest_path(start_residue, end_residue, end_voxels, search, grid, aa1_CA, 
     p = shortest_voxel
     while p != -1:
         path.append(unflatten(p))
-        p = parent[p]
+        p = int(parent[p])
     path.reverse()
     path.insert(0, aa1_CA[start_residue]) # add aa1 CA voxel to path
     path.append(aa2_CA[end_residue]) # add aa2 CA voxel to end of path
