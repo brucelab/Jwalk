@@ -23,6 +23,7 @@
 from array import array
 import numpy as np
 from multiprocessing import Pool, Process, freeze_support
+from collections import OrderedDict
 import sys
 import math
 import os
@@ -96,7 +97,37 @@ def prepare_grid(dens_map, vox):
 
     return bytearray(visited.tobytes()), bytearray(occupied.tobytes()), sy, sx, steps
 
-def breadth_first_search(start_voxels, grid, max_dist):
+def prepare_targets(voxel_lists, grid):
+
+    '''
+
+    Flags the voxels a search is looking for, so the search can stop once it has found them all.
+
+    Returns (flags of target voxels, number of target voxels).
+
+    Arguments:
+
+       *voxel_lists*
+           iterable of lists of target voxels [x, y, z]
+       *grid*
+           output of prepare_grid
+
+    '''
+
+    visited_template, occupied, sy, sx, steps = grid
+
+    flags = bytearray(len(visited_template))
+    count = 0
+    for voxels in voxel_lists:
+        for (x, y, z) in voxels:
+            p = ((z + 1) * sy + (y + 1)) * sx + (x + 1)
+            if not flags[p]:
+                flags[p] = 1
+                count += 1
+
+    return flags, count
+
+def breadth_first_search(start_voxels, grid, max_dist, targets=None):
 
     '''
 
@@ -115,6 +146,10 @@ def breadth_first_search(start_voxels, grid, max_dist):
            output of prepare_grid
        *max_dist*
            maximum distance BFS will search until
+       *targets*
+           output of prepare_targets. The search stops as soon as all of these voxels have been
+           reached - the path to a voxel is fixed when it is first reached, so this doesn't
+           change any result for them.
 
     '''
 
@@ -126,6 +161,13 @@ def breadth_first_search(start_voxels, grid, max_dist):
     root = array('i', [-1]) * n # starting voxel of the path to this voxel
     distance = array('d', [0.0]) * n # distance from starting voxel for each other voxel
 
+    if targets is None:
+        target = bytearray(n)
+        remaining = -1 # never reaches 0 so the search is not cut short
+    else:
+        target = bytearray(targets[0]) # target voxels that have not been reached yet
+        remaining = targets[1]
+
     # place starting voxels into queue and initialise visited and root
     queue = []
     for (x, y, z) in start_voxels:
@@ -133,6 +175,12 @@ def breadth_first_search(start_voxels, grid, max_dist):
         visited[p] = 1
         root[p] = p
         queue.append(p)
+        if target[p]:
+            target[p] = 0
+            remaining -= 1
+
+    if remaining == 0:
+        return visited, parent, root, distance
 
     # grid is searched until queue is empty
     head = 0
@@ -149,6 +197,10 @@ def breadth_first_search(start_voxels, grid, max_dist):
                     parent[q] = p
                     root[q] = root[p]
                     distance[q] = d + step
+                    if target[q]: # stop once every target voxel has been reached
+                        remaining -= 1
+                        if remaining == 0:
+                            return visited, parent, root, distance
                     if not occupied[q]: # if the voxel is in empty space
                         queue.append(q) # add to queue for later searching
 
@@ -229,16 +281,78 @@ def shortest_path(start_residue, end_residue, end_voxels, search, grid, aa1_CA, 
 
     return shortest_distance, path
 
-def calculate_specific_SASD(single_crosslink, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA,
-                            max_dist, vox, grid=None):
+def calculate_specific_SASDs(start_residue, end_residues, aa1_voxels, aa2_voxels, dens_map,
+                             aa1_CA, aa2_CA, max_dist, vox, grid=None):
 
     '''
 
     Breadth First Search of grid. For general info on algorithm see:
     https://en.wikipedia.org/wiki/Breadth-first_search
 
+    One search from start_residue is shared by all of its specific crosslinks.
+
+    Returns a list with a dictionary for each end residue in end_residues, in the same order,
+    containing the solvent accessible surface distance between start_residue and that end residue
+
+    {start res, end res, length in angstroms : voxel path of sasd}
+
+    Arguments:
+
+       *start_residue*
+           key of aa1_voxels. aa1_voxels[start_residue] = all the starting voxels for that
+           residue
+       *end_residues*
+           list of keys of aa2_voxels, the residues start_residue is crosslinked to
+       *aa1_voxels*
+           dictionary containing starting voxels {start_residue : starting voxels}
+       *aa2_voxels*
+           dictionary containing ending voxels {end_residue : ending voxels}
+       *dens_map*
+           grid with solvent accessible surface (masked array)
+       *aa1_CA*
+           dictionary containing voxel of C-alpha
+       *aa2_CA*
+           dictionary containing voxel of C-alpha
+       *max_dist*
+           maximum distance BFS will search until
+       *vox*
+           number of angstoms per voxel
+       *grid*
+           output of prepare_grid, made from dens_map and vox if not given
+
+    '''
+
+    if grid is None:
+        grid = prepare_grid(dens_map, vox)
+
+    targets = prepare_targets([aa2_voxels[end_residue] for end_residue in end_residues], grid)
+    search = breadth_first_search(aa1_voxels[start_residue], grid, max_dist, targets)
+
+    # now we have the paths into empty space starting from start_residue all stored in search.
+    # Now need to extract paths to specific residues
+    specific_xls = []
+    for end_residue in end_residues:
+
+        specific_xl = {}
+
+        shortest = shortest_path(start_residue, end_residue, aa2_voxels[end_residue], search, grid,
+                                 aa1_CA, aa2_CA)
+
+        if shortest:
+            shortest_distance, path = shortest
+            specific_xl[start_residue, end_residue, shortest_distance] = path # start lys, end lys, length of xl = path of xl
+
+        specific_xls.append(specific_xl)
+
+    return specific_xls
+
+def calculate_specific_SASD(single_crosslink, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA,
+                            max_dist, vox, grid=None):
+
+    '''
+
     Returns dictionary containing solvent accessible surface distances between specific starting res
-    and ending res.
+    and ending res. See calculate_specific_SASDs.
 
     {start res, end res, length in angstroms : voxel path of sasd}
 
@@ -267,29 +381,12 @@ def calculate_specific_SASD(single_crosslink, aa1_voxels, aa2_voxels, dens_map, 
 
     '''
 
-    start_residue = single_crosslink[0]
-    end_residue = single_crosslink[1]
-
-    specific_xl = {}
-
-    if grid is None:
-        grid = prepare_grid(dens_map, vox)
-    search = breadth_first_search(aa1_voxels[start_residue], grid, max_dist)
-
-    # now we have a full set of paths into empty space starting from start_residue
-    # all stored in search. Now need to extract paths to specific residue
-    shortest = shortest_path(start_residue, end_residue, aa2_voxels[end_residue], search, grid,
-                             aa1_CA, aa2_CA)
-
-    if shortest:
-        shortest_distance, path = shortest
-        specific_xl[start_residue, end_residue, shortest_distance] = path # start lys, end lys, length of xl = path of xl
-
-    return specific_xl
+    return calculate_specific_SASDs(single_crosslink[0], [single_crosslink[1]], aa1_voxels,
+                                    aa2_voxels, dens_map, aa1_CA, aa2_CA, max_dist, vox, grid)[0]
 
 
 def calculate_SASDs(start_residue, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA,
-                    max_dist, vox, grid=None):
+                    max_dist, vox, grid=None, targets=None):
 
     """
 
@@ -322,6 +419,8 @@ def calculate_SASDs(start_residue, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2
            number of angstoms per voxel
        *grid*
            output of prepare_grid, made from dens_map and vox if not given
+       *targets*
+           output of prepare_targets for all of aa2_voxels, made if not given
 
 
     """
@@ -330,10 +429,12 @@ def calculate_SASDs(start_residue, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2
 
     if grid is None:
         grid = prepare_grid(dens_map, vox)
-    search = breadth_first_search(aa1_voxels[start_residue], grid, max_dist)
+    if targets is None:
+        targets = prepare_targets(aa2_voxels.values(), grid)
+    search = breadth_first_search(aa1_voxels[start_residue], grid, max_dist, targets)
 
-    # now we have a full set of paths into empty space starting from start_residue
-    # all stored in search. Now need to extract paths to specific residues
+    # now we have the paths into empty space starting from start_residue, all stored in search.
+    # Now need to extract paths to specific residues
     for end_residue in aa2_voxels:
         if start_residue != end_residue:
 
@@ -359,22 +460,23 @@ def calculate_SASDs(start_residue, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2
 # data shared by every task, set once per worker process so it is not pickled with each task
 shared = {}
 
-def init_worker(grid, aa1_voxels, aa2_voxels, aa1_CA, aa2_CA, max_dist):
+def init_worker(grid, targets, aa1_voxels, aa2_voxels, aa1_CA, aa2_CA, max_dist):
     """Store the data shared by every task in the worker process."""
-    shared.update(grid=grid, aa1_voxels=aa1_voxels, aa2_voxels=aa2_voxels, aa1_CA=aa1_CA,
-                  aa2_CA=aa2_CA, max_dist=max_dist)
+    shared.update(grid=grid, targets=targets, aa1_voxels=aa1_voxels, aa2_voxels=aa2_voxels,
+                  aa1_CA=aa1_CA, aa2_CA=aa2_CA, max_dist=max_dist)
 
 def calculate_SASDs_task(start_residue):
     """Run calculate_SASDs for one start residue using the shared data."""
     return calculate_SASDs(start_residue, shared['aa1_voxels'], shared['aa2_voxels'], None,
                            shared['aa1_CA'], shared['aa2_CA'], shared['max_dist'], None,
-                           grid=shared['grid'])
+                           grid=shared['grid'], targets=shared['targets'])
 
-def calculate_specific_SASD_task(single_crosslink):
-    """Run calculate_specific_SASD for one crosslink using the shared data."""
-    return calculate_specific_SASD(single_crosslink, shared['aa1_voxels'], shared['aa2_voxels'],
-                                   None, shared['aa1_CA'], shared['aa2_CA'], shared['max_dist'],
-                                   None, grid=shared['grid'])
+def calculate_specific_SASDs_task(crosslinks):
+    """Run calculate_specific_SASDs for a start residue and its end residues using the shared data."""
+    start_residue, end_residues = crosslinks
+    return calculate_specific_SASDs(start_residue, end_residues, shared['aa1_voxels'],
+                                    shared['aa2_voxels'], None, shared['aa1_CA'], shared['aa2_CA'],
+                                    shared['max_dist'], None, grid=shared['grid'])
 
 def parallel_BFS(aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA, crosslink_pairs,
                  max_dist, vox, ncpus, xl_list):
@@ -417,14 +519,23 @@ def parallel_BFS(aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA, crosslink_pai
 
     # the grid is flattened once and shared by every search
     grid = prepare_grid(dens_map, vox)
-    initargs = (grid, aa1_voxels, aa2_voxels, aa1_CA, aa2_CA, max_dist)
 
     if xl_list:
-        task = calculate_specific_SASD_task
-        residues = crosslink_pairs
+        # crosslinks that start at the same residue share a search
+        task = calculate_specific_SASDs_task
+        end_residues = OrderedDict()
+        pair_numbers = OrderedDict()
+        for i, (start_residue, end_residue) in enumerate(crosslink_pairs):
+            end_residues.setdefault(start_residue, []).append(end_residue)
+            pair_numbers.setdefault(start_residue, []).append(i)
+        residues = list(end_residues.items())
+        targets = None
     else:
         task = calculate_SASDs_task
         residues = list(aa1_voxels)
+        targets = prepare_targets(aa2_voxels.values(), grid)
+
+    initargs = (grid, targets, aa1_voxels, aa2_voxels, aa1_CA, aa2_CA, max_dist)
 
     if ncpus > 1:
         # results come back in the order of residues so the output order doesn't depend on timing
@@ -435,6 +546,14 @@ def parallel_BFS(aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA, crosslink_pai
         # alternative call to allow single cpu running on Windows machines
         init_worker(*initargs)
         xl_dictionaries = [task(residue) for residue in residues]
+
+    if xl_list:
+        # put the crosslinks back in the order they were given
+        by_pair = [None] * len(crosslink_pairs)
+        for start_residue, c in zip(pair_numbers, xl_dictionaries):
+            for i, specific_xl in zip(pair_numbers[start_residue], c):
+                by_pair[i] = specific_xl
+        xl_dictionaries = by_pair
 
     for c in xl_dictionaries:
         final_XL.update(c)
