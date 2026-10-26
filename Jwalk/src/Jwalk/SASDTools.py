@@ -20,31 +20,235 @@
 #
 #===============================================================================
 
+from array import array
+import numpy as np
 from multiprocessing import Pool, Process, freeze_support
 import itertools
 import sys
 import math
 import os
 
+# order of voxels to search - by having diagonals last ensures shortest path is returned
+COMB = [(1, 0, 0),
+        (-1, 0, 0),
+        (0, -1, 0),
+        (0, 1, 0),
+        (0, 0, -1),
+        (0, 0, 1),
+        (1, 0, 1),
+        (-1, 0, 1),
+        (0, 1, 1),
+        (0, -1, 1),
+        (1, -1, 0),
+        (-1, -1, 0),
+        (1, 1, 0),
+        (-1, 1, 0),
+        (1, 0, -1),
+        (-1, 0, -1),
+        (0, 1, -1),
+        (0, -1, -1),
+        (1, 1, 1),
+        (1, -1, 1),
+        (-1, 1, 1),
+        (-1, -1, 1),
+        (1, 1, -1),
+        (1, -1, -1),
+        (-1, 1, -1),
+        (-1, -1, -1)]
+
+def prepare_grid(dens_map, vox):
+
+    '''
+
+    Flattens the grid for the BFS. The grid is padded with a one voxel border that is
+    marked as already visited, so the neighbours of a voxel sit at fixed offsets in the
+    flat index and no bounds checks are needed.
+
+    Returns (visited template, occupied voxels, y stride, x stride, steps) where steps is
+    a list of (flat index offset, distance travelled) for each of the 26 neighbours.
+
+    Arguments:
+
+       *dens_map*
+           grid with solvent accessible surface (masked array)
+       *vox*
+           number of angstoms per voxel
+
+    '''
+
+    nz, ny, nx = dens_map.fullMap.shape
+    sy = ny + 2
+    sx = nx + 2
+
+    occupied = np.zeros((nz + 2, sy, sx), dtype=np.uint8)
+    occupied[1:-1, 1:-1, 1:-1] = dens_map.fullMap > 0
+    visited = np.ones((nz + 2, sy, sx), dtype=np.uint8)
+    visited[1:-1, 1:-1, 1:-1] = 0
+
+    # distance of diagonal steps
+    diag1 = (math.sqrt((vox ** 2) * 2)) # 2d diagonal
+    diag2 = (math.sqrt((vox ** 2) * 3)) # 3d diagonal
+    cost = {1: vox, 2: diag1, 3: diag2}
+
+    steps = []
+    for (dx, dy, dz) in COMB:
+        n_axes = (dx != 0) + (dy != 0) + (dz != 0)
+        steps.append(((dz * sy + dy) * sx + dx, cost[n_axes]))
+
+    return bytearray(visited.tobytes()), bytearray(occupied.tobytes()), sy, sx, steps
+
+def breadth_first_search(start_voxels, grid, max_dist):
+
+    '''
+
+    Breadth First Search of grid from a set of starting voxels. For general info on
+    algorithm see: https://en.wikipedia.org/wiki/Breadth-first_search
+
+    Returns (visited, parent, root, distance) as flat arrays indexed like the grid made by
+    prepare_grid. parent is the previous voxel on the path (-1 for a starting voxel), root
+    is the starting voxel of the path and distance is the length of the path in angstroms.
+
+    Arguments:
+
+       *start_voxels*
+           list of starting voxels [x, y, z]
+       *grid*
+           output of prepare_grid
+       *max_dist*
+           maximum distance BFS will search until
+
+    '''
+
+    visited_template, occupied, sy, sx, steps = grid
+
+    visited = bytearray(visited_template) # voxels that have been searched
+    n = len(visited)
+    parent = array('i', [-1]) * n # voxel the path to this voxel came from
+    root = array('i', [-1]) * n # starting voxel of the path to this voxel
+    distance = array('d', [0.0]) * n # distance from starting voxel for each other voxel
+
+    # place starting voxels into queue and initialise visited and root
+    queue = []
+    for (x, y, z) in start_voxels:
+        p = ((z + 1) * sy + (y + 1)) * sx + (x + 1)
+        visited[p] = 1
+        root[p] = p
+        queue.append(p)
+
+    # grid is searched until queue is empty
+    head = 0
+    while head < len(queue):
+        p = queue[head] # take first voxel in queue
+        head += 1
+        d = distance[p]
+        if d <= max_dist:
+            for (offset, step) in steps: # expand in all directions from voxel - in order of COMB.
+                q = p + offset
+                # check voxel hasn't already been searched (the border counts as searched)
+                if not visited[q]:
+                    visited[q] = 1
+                    parent[q] = p
+                    root[q] = root[p]
+                    distance[q] = d + step
+                    if not occupied[q]: # if the voxel is in empty space
+                        queue.append(q) # add to queue for later searching
+
+    return visited, parent, root, distance
+
+def shortest_path(start_residue, end_residue, end_voxels, search, grid, aa1_CA, aa2_CA):
+
+    '''
+
+    Finds the shortest sasd to end_residue from the result of a BFS started at start_residue.
+
+    Returns (length in angstroms, voxel path of sasd) or None if end_residue was not reached.
+
+    Arguments:
+
+       *start_residue*
+           key of aa1_CA
+       *end_residue*
+           key of aa2_CA
+       *end_voxels*
+           list of ending voxels of end_residue
+       *search*
+           output of breadth_first_search
+       *grid*
+           output of prepare_grid
+       *aa1_CA*
+           dictionary containing voxel of C-alpha
+       *aa2_CA*
+           dictionary containing voxel of C-alpha
+
+    '''
+
+    visited, parent, root, distance = search
+    sy, sx = grid[2], grid[3]
+
+    def unflatten(p):
+        r, x = divmod(p, sx)
+        z, y = divmod(r, sy)
+        return [x - 1, y - 1, z - 1]
+
+    (x_1, y_1, z_1) = aa1_CA[start_residue]
+    (x_2, y_2, z_2) = aa2_CA[end_residue]
+
+    shortest_distance = 9999
+    shortest_voxel = None
+
+    # cycling through possible end coords of end_residue to get shortest sasd
+    for (x, y, z) in end_voxels:
+
+        p = ((z + 1) * sy + (y + 1)) * sx + (x + 1)
+
+        if visited[p]:
+
+            (x_s, y_s, z_s) = unflatten(root[p])
+
+            # add the distance between starting/ending residue CA voxel and start/end voxel in path
+            d = distance[p]
+            d += math.sqrt((x_1 - x_s) ** 2 + (y_1 - y_s) ** 2 + (z_1 - z_s) ** 2)
+            d += math.sqrt((x - x_2) ** 2 + (y - y_2) ** 2 + (z - z_2) ** 2)
+
+            # keep record of shortest distance - the last voxel wins a tie
+            if d <= shortest_distance:
+                shortest_distance = d
+                shortest_voxel = p
+
+    if shortest_voxel is None:
+        return None
+
+    # rebuild the path back to the starting voxel
+    path = []
+    p = shortest_voxel
+    while p != -1:
+        path.append(unflatten(p))
+        p = parent[p]
+    path.reverse()
+    path.insert(0, aa1_CA[start_residue]) # add aa1 CA voxel to path
+    path.append(aa2_CA[end_residue]) # add aa2 CA voxel to end of path
+
+    return shortest_distance, path
+
 def calculate_specific_SASD(single_crosslink, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA,
                             max_dist, vox):
-    
+
     '''
-    
+
     Breadth First Search of grid. For general info on algorithm see:
     https://en.wikipedia.org/wiki/Breadth-first_search
-    
+
     Returns dictionary containing solvent accessible surface distances between specific starting res
     and ending res.
-    
+
     {start res, end res, length in angstroms : voxel path of sasd}
-    
+
     Arguments:
-    
+
        *single_crosslink*
            start and end residue.
-           start is key of aa1_voxels. aa1_voxels[start_residue] = all the starting voxels for that 
-           residue 
+           start is key of aa1_voxels. aa1_voxels[start_residue] = all the starting voxels for that
+           residue
        *aa1_voxels*
            dictionary containing starting voxels {start_residue : starting voxels}
        *aa2_voxels*
@@ -61,139 +265,45 @@ def calculate_specific_SASD(single_crosslink, aa1_voxels, aa2_voxels, dens_map, 
            number of angstoms per voxel
 
     '''
-    
+
     start_residue = single_crosslink[0]
     end_residue = single_crosslink[1]
 
     specific_xl = {}
 
-    comb = [[1, 0, 0],
-            [-1, 0, 0],
-            [0, -1, 0],
-            [0, 1, 0],
-            [0, 0, -1],
-            [0, 0, 1],
-            [1, 0, 1],
-            [-1, 0, 1],
-            [0, 1, 1],
-            [0, -1, 1],
-            [1, -1, 0],
-            [-1, -1, 0],
-            [1, 1, 0],
-            [-1, 1, 0],
-            [1, 0, -1],
-            [-1, 0, -1],
-            [0, 1, -1],
-            [0, -1, -1],
-            [1, 1, 1],
-            [1, -1, 1],
-            [-1, 1, 1],
-            [-1, -1, 1],
-            [1, 1, -1],
-            [1, -1, -1],
-            [-1, 1, -1],
-            [-1, -1, -1]]
+    grid = prepare_grid(dens_map, vox)
+    search = breadth_first_search(aa1_voxels[start_residue], grid, max_dist)
 
-    # distance of diagonal steps
-    diag1 = (math.sqrt((vox ** 2) * 2)) # 2d diagonal
-    diag2 = (math.sqrt((vox ** 2) * 3)) # 3d diagonal
-
-    queue = [] # voxels in queue for searching
-    end_voxels = [] # list of voxels to find path to
-    visited = {}  # list works as all the coordinates that have been visited - dictionary gives the path to said coordinate from startpoint
-    distance = {} # keeps distance from starting voxel for each other voxel
-    
-    # place starting voxels into queue and initialise visited and distance
-    for j in aa1_voxels[start_residue]:
-        queue.append([j[0], j[1], j[2]])
-        visited[j[0], j[1], j[2]] = [[j[0], j[1], j[2]]]
-        distance[j[0], j[1], j[2]] = 0
-
-    while queue:
-        x_n, y_n, z_n = queue.pop(0)
-        if distance[x_n, y_n, z_n] <= max_dist:
-            for c in comb:
-                x_temp = x_n + c[0]
-                y_temp = y_n + c[1]
-                z_temp = z_n + c[2]
-                if (x_temp, y_temp, z_temp) not in visited:
-                    if ((0 <= x_temp < dens_map.x_size()) and (0 <= y_temp < dens_map.y_size()) and (
-                            0 <= z_temp < dens_map.z_size())):
-                        temp_list = visited[x_n, y_n, z_n][:]
-                        temp_list.append([x_temp, y_temp, z_temp])
-                        visited[x_temp, y_temp, z_temp] = temp_list  # updated visited list
-
-                        if dens_map.fullMap[z_temp][y_temp][x_temp] <= 0:  # if the voxel is in empty space
-                            queue.append(([x_temp, y_temp, z_temp]))
-                        # calculate the distance
-                        diff_x = x_temp - x_n
-                        diff_y = y_temp - y_n
-                        diff_z = z_temp - z_n
-                        if diff_x != 0 and diff_y != 0 and diff_z != 0:
-                            distance[x_temp, y_temp, z_temp] = distance[x_n, y_n, z_n] + diag2
-                        elif diff_x != 0 and diff_y != 0:
-                            distance[x_temp, y_temp, z_temp] = distance[x_n, y_n, z_n] + diag1
-                        elif diff_x != 0 and diff_z != 0:
-                            distance[x_temp, y_temp, z_temp] = distance[x_n, y_n, z_n] + diag1
-                        elif diff_y != 0 and diff_z != 0:
-                            distance[x_temp, y_temp, z_temp] = distance[x_n, y_n, z_n] + diag1
-                        else:
-                            distance[x_temp, y_temp, z_temp] = distance[x_n, y_n, z_n] + vox
-                        
     # now we have a full set of paths into empty space starting from start_residue
-    # all stored in visited. Now need to extract paths to specific residue
-    shortest_distance = 9999
-    all_distances = {}
+    # all stored in search. Now need to extract paths to specific residue
+    shortest = shortest_path(start_residue, end_residue, aa2_voxels[end_residue], search, grid,
+                             aa1_CA, aa2_CA)
 
-    for j in aa2_voxels[end_residue]:  
-
-        (x, y, z) = j
-
-        if (x, y, z) in visited:
-
-            visited[(x, y, z)].insert(0, aa1_CA[start_residue]) # add aa1 CA voxel to path
-            visited[(x, y, z)].append(aa2_CA[end_residue]) # add aa2 CA voxel to end of path
-
-            # add the distance between starting/ending residue CA voxel and start/end voxel in path
-            for i in [1, len(visited[(x, y, z)]) - 1]:
-                (x_1, y_1, z_1) = visited[(x, y, z)][i - 1]
-                (x_2, y_2, z_2) = visited[(x, y, z)][i]
-                distance[(x, y, z)] += math.sqrt((x_1 - x_2) ** 2 + (y_1 - y_2) ** 2 + (z_1 - z_2) ** 2)
-
-            all_distances[distance[(x, y, z)]] = visited[(x, y, z)]  # linking distance:path
-            
-            # keep record of shortest distance
-            if shortest_distance > distance[(x, y, z)]:
-                shortest_distance = distance[(x, y, z)]
-
-            # now adding shortest xl to the final list
-
-            if shortest_distance != 9999:
-                # this is just to order the dict so that chain goes alphabetically
-                specific_xl[start_residue, end_residue, shortest_distance] = all_distances[
-                    shortest_distance]  # start lys, end lys, length of xl = path of xl
+    if shortest:
+        shortest_distance, path = shortest
+        specific_xl[start_residue, end_residue, shortest_distance] = path # start lys, end lys, length of xl = path of xl
 
     return specific_xl
 
 
 def calculate_SASDs(start_residue, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA,
                     max_dist, vox):
-    
+
     """
-    
+
     Breadth First Search of grid. For general info on algorithm see:
     https://en.wikipedia.org/wiki/Breadth-first_search
-    
+
     Returns dictionary containing solvent accessible surface distances between starting res
     and all possible ending res.
-    
+
     {start res, end res, length in angstroms : voxel path of sasd}
-    
+
     Arguments:
-    
+
        *start_residue*
-           key of aa1_voxels. aa1_voxels[start_residue] = all the starting voxels for that 
-           residue 
+           key of aa1_voxels. aa1_voxels[start_residue] = all the starting voxels for that
+           residue
        *aa1_voxels*
            dictionary containing starting voxels {start_residue : starting voxels}
        *aa2_voxels*
@@ -208,131 +318,36 @@ def calculate_SASDs(start_residue, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2
            maximum distance BFS will search until
        *vox*
            number of angstoms per voxel
-           
-           
-    """ 
-    
+
+
+    """
+
     sasds = {}
 
-    # order of voxels to search - by having diagonals last ensures shortest path is returned
-    comb = [[1, 0, 0],
-            [-1, 0, 0],
-            [0, -1, 0],
-            [0, 1, 0],
-            [0, 0, -1],
-            [0, 0, 1],
-            [1, 0, 1],
-            [-1, 0, 1],
-            [0, 1, 1],
-            [0, -1, 1],
-            [1, -1, 0],
-            [-1, -1, 0],
-            [1, 1, 0],
-            [-1, 1, 0],
-            [1, 0, -1],
-            [-1, 0, -1],
-            [0, 1, -1],
-            [0, -1, -1],
-            [1, 1, 1],
-            [1, -1, 1],
-            [-1, 1, 1],
-            [-1, -1, 1],
-            [1, 1, -1],
-            [1, -1, -1],
-            [-1, 1, -1],
-            [-1, -1, -1]]
-
-    # distance of diagonal steps
-    diag1 = (math.sqrt((vox ** 2) * 2)) # 2d diagonal
-    diag2 = (math.sqrt((vox ** 2) * 3)) # 3d diagonal
-
-    queue = [] # voxels in queue for searching
-    visited = {}  # list works as all the coordinates that have been visited - dictionary gives the path to said coordinate from startpoint
-    distance = {} # keeps distance from starting voxel for each other voxel
-    
-    # place starting voxels into queue and initialise visited and distance
-    for j in aa1_voxels[start_residue]:
-        queue.append([j[0], j[1], j[2]])
-        visited[j[0], j[1], j[2]] = [[j[0], j[1], j[2]]]
-        distance[j[0], j[1], j[2]] = 0
-    
-    # grid is searched until queue is empty
-    while queue:
-        x_n, y_n, z_n = queue.pop(0) # take first voxel in queue
-        if distance[x_n, y_n, z_n] <= max_dist:
-            for c in comb: # expand in all directions from voxel - in order of comb.
-                x_temp = x_n + c[0]
-                y_temp = y_n + c[1]
-                z_temp = z_n + c[2]
-                # check voxel hasn't already been searched
-                if (x_temp, y_temp, z_temp) not in visited:
-                    # check that voxel is within bounds of the grid
-                    if ((0 <= x_temp < dens_map.x_size()) and (0 <= y_temp < dens_map.y_size()) and (
-                            0 <= z_temp < dens_map.z_size())):
-                        # add path to this voxel to visited    
-                        temp_list = visited[x_n, y_n, z_n][:] 
-                        temp_list.append([x_temp, y_temp, z_temp]) 
-                        visited[x_temp, y_temp, z_temp] = temp_list  
-
-                        if dens_map.fullMap[z_temp][y_temp][x_temp] <= 0:  # if the voxel is in empty space
-                            queue.append(([x_temp, y_temp, z_temp])) # add to queue for later searching
-                        
-                        # calculate the distance to voxel from start voxel
-                        diff_x = x_temp - x_n
-                        diff_y = y_temp - y_n
-                        diff_z = z_temp - z_n
-                        if diff_x != 0 and diff_y != 0 and diff_z != 0:
-                            distance[x_temp, y_temp, z_temp] = distance[x_n, y_n, z_n] + diag2
-                        elif diff_x != 0 and diff_y != 0:
-                            distance[x_temp, y_temp, z_temp] = distance[x_n, y_n, z_n] + diag1
-                        elif diff_x != 0 and diff_z != 0:
-                            distance[x_temp, y_temp, z_temp] = distance[x_n, y_n, z_n] + diag1
-                        elif diff_y != 0 and diff_z != 0:
-                            distance[x_temp, y_temp, z_temp] = distance[x_n, y_n, z_n] + diag1
-                        else:
-                            distance[x_temp, y_temp, z_temp] = distance[x_n, y_n, z_n] + vox
+    grid = prepare_grid(dens_map, vox)
+    search = breadth_first_search(aa1_voxels[start_residue], grid, max_dist)
 
     # now we have a full set of paths into empty space starting from start_residue
-    # all stored in visited. Now need to extract paths to specific residues
+    # all stored in search. Now need to extract paths to specific residues
     for end_residue in aa2_voxels:
         if start_residue != end_residue:
-            shortest_distance = 9999
-            all_distances = {}
-            
-            # cycling through possible end coords of end_residue to get shortest sasd
-            for j in aa2_voxels[end_residue]:  
 
-                (x, y, z) = j
-
-                if (x, y, z) in visited:
-
-                    visited[(x, y, z)].insert(0, aa1_CA[start_residue]) # add aa1 CA voxel to path
-                    visited[(x, y, z)].append(aa2_CA[end_residue]) # add aa2 CA voxel to end of path
-
-                    # add the distance between starting/ending residue CA voxel and start/end voxel in path
-                    for i in [1, len(visited[(x, y, z)]) - 1]:
-                        (x_1, y_1, z_1) = visited[(x, y, z)][i - 1]
-                        (x_2, y_2, z_2) = visited[(x, y, z)][i]
-                        distance[(x, y, z)] += math.sqrt((x_1 - x_2) ** 2 + (y_1 - y_2) ** 2 + (z_1 - z_2) ** 2)
-
-                    all_distances[distance[(x, y, z)]] = visited[(x, y, z)]  # linking distance:path
-                    
-                    # keep record of shortest distance
-                    if shortest_distance > distance[(x, y, z)]:
-                        shortest_distance = distance[(x, y, z)]
+            shortest = shortest_path(start_residue, end_residue, aa2_voxels[end_residue], search,
+                                     grid, aa1_CA, aa2_CA)
 
             # add shortest distance sasd to output dictionary
 
-            if shortest_distance != 9999:
+            if shortest:
+                shortest_distance, path = shortest
                 if start_residue[1] < end_residue[1]:  # this to order the dict so that chain goes alphabetically
-                    sasds[start_residue, end_residue, shortest_distance] = all_distances[shortest_distance]     
+                    sasds[start_residue, end_residue, shortest_distance] = path
                 elif end_residue[1] < start_residue[1]:
-                    sasds[end_residue, start_residue, shortest_distance] = all_distances[shortest_distance]
+                    sasds[end_residue, start_residue, shortest_distance] = path
                 # if both on the same chain, then ordered to go numerically
                 elif start_residue[0] < end_residue[0]:
-                    sasds[start_residue, end_residue, shortest_distance] = all_distances[shortest_distance]
+                    sasds[start_residue, end_residue, shortest_distance] = path
                 else:
-                    sasds[end_residue, start_residue, shortest_distance] = all_distances[shortest_distance]
+                    sasds[end_residue, start_residue, shortest_distance] = path
 
     return sasds
 
