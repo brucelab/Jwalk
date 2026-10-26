@@ -203,6 +203,9 @@ def process_input_crosslinks(uv_xl):
     with open(uv_xl) as xl_in:
         for line in xl_in:
             count +=1
+            # skip blank lines
+            if len(line.strip()) == 0:
+                continue
             col = line.split("|")
             try:
                 chain1 = col[1].rstrip()
