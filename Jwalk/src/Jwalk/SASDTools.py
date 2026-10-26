@@ -167,6 +167,9 @@ def breadth_first_search(start_voxels, grid, max_dist, targets=None):
     root = np.full(n, -1, dtype=np.int32) # starting voxel of the path to this voxel
     distance = np.zeros(n, dtype=np.float64) # distance from starting voxel for each other voxel
 
+    unclaimed = np.iinfo(np.int64).max
+    claim = np.full(n, unclaimed, dtype=np.int64) # scratch space to find the first path to a voxel
+
     # place starting voxels into the first level and initialise visited and root
     level = np.array([((z + 1) * sy + (y + 1)) * sx + (x + 1) for (x, y, z) in start_voxels],
                      dtype=np.int64)
@@ -197,8 +200,10 @@ def breadth_first_search(start_voxels, grid, max_dist, targets=None):
 
         # a voxel reached more than once belongs to the first path that reaches it
         found = candidates[unsearched]
-        first = np.unique(found, return_index=True)[1]
-        first.sort()
+        position = np.arange(len(found))
+        np.minimum.at(claim, found, position) # lowest position that reaches each voxel
+        first = np.flatnonzero(claim[found] == position)
+        claim[found] = unclaimed
         new = found[first]
         source = unsearched[first]
         previous = level[source // n_moves]
