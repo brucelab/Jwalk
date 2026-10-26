@@ -521,7 +521,7 @@ def write_sasd_to_txt(sasds,pdb):
 	if not os.path.exists('./Jwalk_results'):
 		os.makedirs('./Jwalk_results')
 		
-	with open('./Jwalk_results/%s_crosslink_list.txt' % pdb[:-4],'w') as outf:
+	with open('./Jwalk_results/%s_crosslink_list.txt' % os.path.splitext(os.path.basename(pdb))[0],'w') as outf:
 		
 		outf.write(' '.join('{0:<13}'.format(col) for col in ['Index','Model','Atom1','Atom2','SASD','Euclidean Distance']))
 		outf.write('\n')
@@ -568,7 +568,7 @@ def write_sasd_to_pdb(dens_map,sasds,pdb):
 		
 		path_coord[xl] = a
 		
-	with open('./Jwalk_results/%s_crosslinks.pdb' % pdb[:-4],'w') as pdb:
+	with open('./Jwalk_results/%s_crosslinks.pdb' % os.path.splitext(os.path.basename(pdb))[0],'w') as pdb:
 		
 		m_count = 1
 		for xl in path_coord:
