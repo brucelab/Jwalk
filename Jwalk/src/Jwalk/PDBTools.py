@@ -489,16 +489,13 @@ def read_PDB_file(filename,hetatm=False,water=False):
             hetfield=res.get_id()[0]
             if hetfield[0]=="H":
                 for atom in res:
-                    BioPyAtom(atom)
                     hetatomList.append(BioPyAtom(atom))
             elif hetfield[0]=="W":
                 for atom in res:
-                    BioPyAtom(atom)
                     wateratomList.append(BioPyAtom(atom))
             else:
                 for atom in res:
                     if atom.id[0] != "H":
-                        BioPyAtom(atom)
                         atomList.append(BioPyAtom(atom))
         if hetatm:
             atomList = append(atomList, hetatomList)
@@ -581,25 +578,16 @@ def write_sasd_to_pdb(dens_map,sasds,pdb):
 			count = 1
 			pdb.write('MODEL %d %s%d%s-%s%d%s\n' % (m_count,res1,aa1,chain1,res2,aa2,chain2))
 			m_count = m_count+1
+			lines = []
 			for (x,y,z) in path_coord[xl]:
-				p=Vector(x,y,z)
-				a=p.to_atom()
-				a.record_name = 'ATOM'
-				a.serial = count
-				a.atom_name = 'C'
-				a.alt_loc = ''
-				a.res = 'GLY'
-				a.chain = 'A'
-				a.res_no = count
-				a.icode = ''
-				a.occ = 1
-				a.temp_fac = 0
-				a.elem = 'C'
-				a.charge = ''
-				#print a.__dict__
-				#atom = BioPyAtom(a)
-				pdb.write(a.write_to_PDB())
+				# the record BioPyAtom.write_to_PDB makes for a carbon atom of a glycine
+				line = 'ATOM'.ljust(6) + str(count).rjust(5) + ' ' + 'C'.center(4) + ''.ljust(1) + 'GLY'.ljust(3) + ' ' + 'A'.ljust(1) + str(count).rjust(4) + ''.ljust(1) + '   '
+				line += ('%.3f' % x).rjust(8) + ('%.3f' % y).rjust(8) + ('%.3f' % z).rjust(8)
+				line += ('%.2f' % float(1)).rjust(6) + ('%.2f' % float(0)).rjust(6) + '          '
+				line += 'C'.rjust(2) + ''.ljust(2) + '\n'
+				lines.append(line)
 				count +=1
+			pdb.writelines(lines)
 			pdb.write('END\n') 
         
 
