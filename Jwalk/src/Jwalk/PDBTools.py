@@ -306,10 +306,9 @@ class BioPyAtom:
 #             
         self.occ = atom.get_occupancy()
         self.temp_fac = atom.get_bfactor()
-        try:
-            self.elem = atom.get_element()
-        except:
-                self.elem=""
+        # Biopython reads the element column, or works it out from the atom name if it is blank.
+        # (atom.get_element() does not exist, so the element used to be lost here.)
+        self.elem = (getattr(atom, "element", None) or "").strip().upper()
         self.charge=""  
             #Mass of atom as given by atomicMasses global constant. Defaults to 1.
         self.mass = 1.0

@@ -40,6 +40,8 @@ type "jwalk" plus any of the below flags:
   -surface          use higher accuracy method to calculate solvent accessibility - slower
   -ligand           treat non-water HETATM records (ligands, ions, modified residues) as
                     obstacles in the solvent accessible surface (default: HETATM ignored)
+                    see docs/20261027-ligand-mode.md for what is included and how atoms
+                    are sized
 
 if no flags are added, Jwalk will calculate the SASDs between all lysine residues on
 every .pdb file in the directory.

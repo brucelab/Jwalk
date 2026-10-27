@@ -107,6 +107,12 @@ A consequence is that adding obstacles can make an SASD *shorter*. With `-ligand
 
 Note also that `-ligand` can move the grid origin (`makeGrid` sizes the grid from every atom read), which changes the voxel discretisation for every residue. On `test.pdb` that alone changed 64 of 66 SASDs; hold the grid fixed when comparing runs with and without ligands.
 
+These measurements were taken with the first `-ligand` implementation, which chose each atom's sphere from the first letter of its name. The sphere is now chosen by element (see `20261027-ligand-mode.md`), which changes the two Se spheres on `test.pdb` and would move the exact figures slightly, but not the conclusions.
+
+### Fixed since: element never read from the PDB
+
+`BioPyAtom` recorded the element with `atom.get_element()`, which does not exist in Biopython (the element is the `.element` attribute); a bare `except` hid the `AttributeError` and `elem` was `""` for every atom. Nothing in `jwalk` used the element until the surface code was switched to element-based radii, so this had no visible effect before. Fixed in `PDBTools.BioPyAtom.__init__`; the element column of PDBs written by `BioPy_Structure.write_to_PDB` is now filled in too (`write_sasd_to_pdb` does not use that writer, so result files are unchanged).
+
 ## Caveats
 
 * **Shared machine.** The server had a load average of about 10-12 during the final measurement, and earlier in the session the same code varied by up to 1.5x between runs (the original benchmark ranged from 34 s to 78 s wall). CPU time is steadier than wall time but not immune. Treat the ratios as indicative; the ordering of the steps is reliable, the exact factors are not.
