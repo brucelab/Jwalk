@@ -34,6 +34,7 @@ from multiprocessing import cpu_count
 max_dist = 60
 vox = 1
 surface = False
+ligand = False
 xl_list = []
 aa1 = "LYS"
 aa2 = "LYS"
@@ -79,6 +80,8 @@ parser.add_argument('-vox', nargs=1, type=int,
 					help='specify voxel size of grid in Angstroms (a whole number)')
 parser.add_argument('-surface', action="store_true",
 					help='use higher accuracy method to calculate solvent accessibility - requires Freesasa installation')
+parser.add_argument('-ligand', action="store_true",
+					help='treat non-water HETATM records (ligands, ions, modified residues) as obstacles in the solvent accessible surface')
 parser.add_argument('-ncpus', nargs=1, type=int,
 					help='specify number of cpus to use')
 
@@ -119,12 +122,15 @@ if args.surface:
 	ACCESS_BIN = "freesasa"
 	surface = True
 
+if args.ligand:
+	ligand = True
+
 if args.ncpus:
 	ncpus = int(args.ncpus[0])
 
 #######################################
 
-def runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list):
+def runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list, ligand=False):
     """
         Execute Jwalk with processed command line options
 			
@@ -136,13 +142,14 @@ def runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list):
 			aa2: ending residues type
 			ncpus: number of cpus to use
 			pdb_list: default is all pdbs in directory, unless otherwise stated
+			ligand: if True include non-water HETATM records when building the surface
                 
     """
     for pdb in pdb_list:
     
         print("calculating crosslinks on", pdb)
         # load pdb into Jwalk
-        structure_instance = PDBTools.read_PDB_file(pdb)
+        structure_instance = PDBTools.read_PDB_file(pdb, hetatm=ligand)
         # generate grid of voxel size (vox) that encapsulates pdb
         grid = GridTools.makeGrid(structure_instance, vox)
     
@@ -182,4 +189,4 @@ def runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list):
         print(len(sasds), "SASDs calculated")
             
 if __name__ == "__main__":
-    runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list)
+    runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list, ligand)

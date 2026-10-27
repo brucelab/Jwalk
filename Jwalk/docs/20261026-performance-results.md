@@ -99,6 +99,14 @@ Found by reading the code only (not run, since freesasa is not installed here, o
 * `check_solvent_accessibility_freesasa` has `test_open.close` without parentheses (the file is not explicitly closed) and `sd_res` is unbound if the residue list is empty.
 * Residues are keyed by number and chain, ignoring insertion codes, in `GridTools` and `get_euclidean_distances`; `get_euclidean_distances` reads every model of an NMR file while Biopython reads only the first.
 
+### SASDs are hop-minimal, not angstrom-minimal (original algorithm, not changed)
+
+The BFS in `SASDTools` is a first-arrival search: the path to a voxel is the one with the fewest steps, and the SASD is the angstrom length (1, sqrt 2, sqrt 3 per step) summed along that path. This is not a weighted shortest path. Measured against Dijkstra on the same 26-neighbour grid (`Examples/test.pdb`, 66 LYS pairs, `-vox 1`, 2026-10-27): the BFS overestimates by 1.1 A on average and 6.3 A at most, and never underestimates.
+
+A consequence is that adding obstacles can make an SASD *shorter*. With `-ligand` on `test.pdb` and the grid held fixed, 13 of 66 SASDs changed and 2 got shorter (26-125: 24.02 -> 23.56 A; 46-77: 56.35 -> 55.71 A). In both, a blocked hop-minimal route was replaced by a route one hop longer but with fewer diagonal steps. Dijkstra on the same grids never got shorter. This reproduces the original queue BFS, so it is not an optimization regression; replacing it with Dijkstra would shift every result by about 1 A and is left as a separate decision.
+
+Note also that `-ligand` can move the grid origin (`makeGrid` sizes the grid from every atom read), which changes the voxel discretisation for every residue. On `test.pdb` that alone changed 64 of 66 SASDs; hold the grid fixed when comparing runs with and without ligands.
+
 ## Caveats
 
 * **Shared machine.** The server had a load average of about 10-12 during the final measurement, and earlier in the session the same code varied by up to 1.5x between runs (the original benchmark ranged from 34 s to 78 s wall). CPU time is steadier than wall time but not immune. Treat the ratios as indicative; the ordering of the steps is reliable, the exact factors are not.
