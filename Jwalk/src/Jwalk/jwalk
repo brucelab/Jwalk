@@ -162,9 +162,10 @@ def runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list, ligand=
         
         if surface == True:
             # check more rigorously if residues are solvent accessible or not
-            aa1_CA = SurfaceTools.check_solvent_accessibility_freesasa(pdb, aa1_CA, ACCESS_BIN, xl_list)
+            # with -ligand, freesasa sees the same hetero atoms as the grid does
+            aa1_CA = SurfaceTools.check_solvent_accessibility_freesasa(pdb, aa1_CA, ACCESS_BIN, xl_list, hetatm=ligand)
             if aa1 != aa2 or xl_list:
-                aa2_CA = SurfaceTools.check_solvent_accessibility_freesasa(pdb, aa2_CA, ACCESS_BIN, xl_list)
+                aa2_CA = SurfaceTools.check_solvent_accessibility_freesasa(pdb, aa2_CA, ACCESS_BIN, xl_list, hetatm=ligand)
             else:
                 aa2_CA = aa1_CA.copy()
                             

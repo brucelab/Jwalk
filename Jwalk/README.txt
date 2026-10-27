@@ -38,6 +38,8 @@ type "jwalk" plus any of the below flags:
   -aa1 AA1          specify starting amino-acid via three letter code eg. HIS
   -aa2 AA2          specify starting amino-acid via three letter code eg. TYR
   -surface          use higher accuracy method to calculate solvent accessibility - slower
+                    needs the freesasa command on your PATH (FreeSASA 2.0 or 2.1,
+                    http://freesasa.github.io/); with -ligand, freesasa also sees the ligands
   -ligand           treat non-water HETATM records (ligands, ions, modified residues) as
                     obstacles in the solvent accessible surface (default: HETATM ignored)
                     see docs/20261027-ligand-mode.md for what is included and how atoms

@@ -32,7 +32,16 @@ With `-ligand`, every residue whose Biopython hetfield starts with `H` is read: 
 
 * Crosslink sites are still chosen by residue name against `-aa1`/`-aa2` or the `-xl_list`. A modified lysine written as `HETATM` (for example LLP) becomes an obstacle but is not treated as a LYS for crosslinking.
 * `get_euclidean_distances` re-reads the file and takes only `ATOM` records named `CA`, so a calcium ion (`HETATM`, name `CA`) is never mistaken for an alpha carbon.
-* The `-surface` option runs freesasa on the original file without `--hetatm`, so freesasa's solvent-accessibility test still ignores ligands even when the grid includes them. See [Not done](#not-done).
+
+### `-ligand` with `-surface`
+
+`-surface` asks freesasa whether each residue of interest is solvent exposed (relative all-atom SASA above 7%) before the path search. With `-ligand`, Jwalk now runs freesasa with `--hetatm` so that it sees the same ligand atoms the grid does. freesasa's `--hetatm` would also count every water, which Jwalk leaves out, so Jwalk first writes a copy of the PDB without `HOH`/`WAT` residues (`<name>_nowater.pdb`, deleted after the run) and gives freesasa that. The `.rsa` file is written next to the PDB as before; its second line names the `_nowater` input so you can tell which mode produced it.
+
+On `Examples/test.pdb` this lowers the relative SASA of the three lysines next to the ligands (119: 48.8 -> 41.2, 125: 18.0 -> 10.0, 135: 61.9 -> 42.7) and leaves the other nine unchanged; with water included as well they would drop much further (125 to 8.9, 77 from 30.8 to 13.0). All twelve are still above the 7% threshold here.
+
+freesasa prints a warning for every ligand atom whose radius it has to guess (`atom 'SE4 SE  ' unknown, guessing element is 'SE'`). This is expected and harmless. Hetero residues appear in the `.rsa` with `N/A` for relative SASA, which the parser skips.
+
+**freesasa version.** The `.rsa` parser in `SurfaceTools` used fixed columns written for FreeSASA 2.0 and crashed on 2.1 output (`ValueError: could not convert string to float: '8  83.'`), because 2.1 widened the chain column. It now splits on whitespace and accepts both layouts, a blank chain, insertion codes and `N/A`. FreeSASA 2.1 also changed the reference values used for relative SASA; absolute values are identical and on `test.pdb` the set of residues above 7% is the same under 2.0 and 2.1.3. On this server freesasa 2.1.3 is at `/data/bin/freesasa` (built from source in `/data/software/freesasa-2.1.3`, installed under `/data/software/freesasa`).
 
 ## How atoms become obstacles
 
@@ -126,12 +135,15 @@ All runs used `Jwalk/src/jwalk-launcher` (Python 3.12, NumPy 2.5.4, Biopython 1.
 
 **Monotonicity.** On fixed grids (ligand atoms added to the surface, grid origin held), Dijkstra shortest paths for all 66 pairs never got shorter with ligands; 13 changed. Jwalk's BFS changed 13 and shortened 2 (see above). Jwalk's BFS overestimates Dijkstra by 1.1 A on average, 6.3 A at most, and never underestimates, with or without ligands. These measurements were taken with the first, name-based `-ligand` implementation; the element change alters the Se spheres and so would move the exact figures slightly, but not the conclusions.
 
-**Not tested.** `-surface` (freesasa is not installed on this machine). `setup.py install`. Files whose element column is absent *and* whose atom names Biopython cannot interpret.
+**`-surface` (freesasa 2.1.3).** After the parser fix: `-surface`, `-surface -ligand`, `-surface -xl_list` and `-surface -ligand -aa1 HIS -aa2 LYS` (two freesasa calls) all run to completion; runs without `-surface` are byte-identical to before. With `-ligand` the `.rsa` lists the 4 ligand residues with `N/A` and no waters, and the `_nowater.pdb` copy is removed afterwards. The parser gives the same set of exposed residues (93 of 124, all 12 lysines) from the bundled FreeSASA 2.0 `Examples/test.rsa` and from 2.1.3 output, and unit cases cover both layouts, a blank chain, `N/A`, an insertion code, a negative residue number and malformed lines. A stale `.rsa` next to the PDB is deleted before freesasa runs, and a missing `freesasa` executable gives a one-line message and exit 1 instead of a traceback.
+
+**Not tested.** `setup.py install`. Files whose element column is absent *and* whose atom names Biopython cannot interpret.
 
 ## Not done
 
-* **freesasa ignores ligands under `-surface`.** `SurfaceTools.check_solvent_accessibility_freesasa` runs `freesasa --format=rsa --radii=naccess file.pdb` without `--hetatm`. With `-ligand -surface`, residue accessibility is judged without the ligand while the path search includes it. Adding `--hetatm` when `-ligand` is set is a one-line change, but freesasa's naccess radius set may not cover every ligand element and this needs testing on a machine with freesasa.
 * **`SurfaceTools.check_solvent_accessibility`** (the pure-Python accessibility check, not the freesasa one) still indexes radii by the first letter of the atom name and would raise `KeyError` on a phosphorus atom. Nothing in `jwalk` calls it.
+* **freesasa radii for ligand atoms** are freesasa's own guesses from the element (it warns for each), not Jwalk's table above, so the two accessibility tests do not use identical radii. They never did for protein atoms either (`--radii=naccess` versus Jwalk's four values).
+* **The "and 1 N-terminus" message** printed by `-surface` for lysines reports one lysine too few (`len(aa1_CA)-1`); nothing adds an N-terminus. Cosmetic, unchanged.
 * **Grid sized from all atoms.** See "The grid moves" above.
 * **No `-water` flag.** `read_PDB_file(water=True)` exists; nothing exposes it.
 * **Radii for metals.** All use the carbon default. A per-element table (ionic or vdW) could be added to the `radius` dictionary if someone needs it.

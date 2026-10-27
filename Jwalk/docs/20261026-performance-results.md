@@ -96,7 +96,7 @@ Verified by running them:
 Found by reading the code only (not run, since freesasa is not installed here, or not tested):
 
 * The `-surface` message prints `len(aa1_CA)-1` lysines "and 1 N-terminus", but nothing in the code adds an N-terminus, so the lysine count shown is one too low.
-* `check_solvent_accessibility_freesasa` has `test_open.close` without parentheses (the file is not explicitly closed) and `sd_res` is unbound if the residue list is empty.
+* `check_solvent_accessibility_freesasa`: `sd_res` is unbound if the residue list is empty. (The `test_open.close` without parentheses is gone: the function now checks for the `.rsa` with `os.path.exists`, deletes a stale one before running freesasa, and reports a missing `freesasa` executable instead of raising. Its `.rsa` parser was also rewritten for FreeSASA 2.1, whose column layout crashed the fixed-column parser; see `20261027-ligand-mode.md`.)
 * Residues are keyed by number and chain, ignoring insertion codes, in `GridTools` and `get_euclidean_distances`; `get_euclidean_distances` reads every model of an NMR file while Biopython reads only the first.
 
 ### SASDs are hop-minimal, not angstrom-minimal (original algorithm, not changed)

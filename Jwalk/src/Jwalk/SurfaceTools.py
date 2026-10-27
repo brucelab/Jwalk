@@ -23,6 +23,8 @@
 import sys
 from math import cos, sin
 import subprocess
+import os
+import re
 
 def expand_points(atom,sphere):
     """ Exapnd the unit sphere around specific x,y,z point and returns surface points"""
@@ -202,7 +204,91 @@ def update_crosslink_pairs(crosslink_pairs, aa1_CA, aa2_CA, remove_aa1, remove_a
                     
     return crosslink_pairs_final
     
-def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa", xl_list = False):
+def parse_rsa_line(line):
+
+    """
+
+    Reads one RES line of a freesasa .rsa file.
+
+    Returns (residue number, chain, residue name, relative all-atom SASA) or None if the line is
+    not a residue line or has no relative SASA (freesasa writes N/A for hetero residues).
+
+    The columns are separated by whitespace rather than fixed, because freesasa 2.1 moved the
+    chain to make room for longer chain labels. With a chain the line is
+    RES LYS A 21 ABS REL ... (14 fields), without one RES LYS 21 ABS REL ... (13 fields).
+    An insertion code on the residue number is dropped, as it is everywhere else in Jwalk.
+
+    Arguments:
+
+       *line*
+           one line of the .rsa file
+
+    """
+
+    if not line.startswith("RES"):
+        return None
+
+    col = line.split()
+
+    if len(col) == 14:
+        name, chain, num, rel = col[1], col[2], col[3], col[5]
+    elif len(col) == 13:
+        name, chain, num, rel = col[1], " ", col[2], col[4]
+    else:
+        return None
+
+    number = re.match(r"-?\d+", num)
+
+    try:
+        return int(number.group()), chain, name, float(rel)
+    except (AttributeError, ValueError):
+        return None
+
+def write_pdb_without_water(prot, filename):
+
+    """
+
+    Copies a pdb file leaving out the water molecules, so that freesasa --hetatm sees the same
+    atoms as Jwalk does with -ligand (read_PDB_file keeps hetero residues but not water; it
+    treats HOH and WAT as water, as Biopython does).
+
+    Arguments:
+
+       *prot*
+           .pdb file to copy
+       *filename*
+           file to write
+
+    """
+
+    with open(prot) as inf, open(filename, "w") as outf:
+        for line in inf:
+            if line.startswith("HETATM") and line[17:20].strip() in ("HOH", "WAT"):
+                continue
+            outf.write(line)
+
+def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa", xl_list = False, hetatm = False):
+
+    """
+
+    Runs freesasa on the pdb file and returns the residues of aa1_CA that it finds on the surface
+    (relative all-atom SASA above 7%).
+
+    Arguments:
+
+       *prot*
+           .pdb file
+       *aa1_CA*
+           residues of interest {(res_no, chain, res) : CA voxel}
+       *freesasa_source*
+           freesasa executable
+       *xl_list*
+           True if the residues come from a crosslink list
+       *hetatm*
+           include hetero residues (ligands, ions) in the freesasa calculation, as -ligand does
+           in the Jwalk grid. Water is left out either way.
+
+    """
 
     # dictionary for text output
     string_dict = {"LYS":"lysines",
@@ -227,36 +313,46 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
                 "TYR":"tyrosines"
                 }
     
-    cmd = [freesasa_source,"--format=rsa","--output=%s.rsa" % prot[:-4],"--radii=naccess",prot]
-    
-    ext_freesasa = subprocess.Popen(cmd)
-    ext_freesasa.communicate()
-    
+    rsa_file = os.path.splitext(prot)[0] + ".rsa"
+
+    # an .rsa left by an earlier run must not be mistaken for this one's
+    if os.path.exists(rsa_file):
+        os.remove(rsa_file)
+
+    cmd = [freesasa_source,"--format=rsa","--output=%s" % rsa_file,"--radii=naccess"]
+
+    if hetatm:
+        # freesasa --hetatm would also count water, which -ligand leaves out of the grid
+        input_pdb = os.path.splitext(prot)[0] + "_nowater.pdb"
+        write_pdb_without_water(prot, input_pdb)
+        cmd += ["--hetatm", input_pdb]
+    else:
+        input_pdb = None
+        cmd.append(prot)
+
     try:
-        test_open = open(prot[:-4]+".rsa")
-        test_open.close
-    except:
+        ext_freesasa = subprocess.Popen(cmd)
+        ext_freesasa.communicate()
+    except OSError:
+        print("Could not run '%s'. Please check you have Freesasa installed and on your PATH. Go to 'http://freesasa.github.io/' " % freesasa_source)
+        exit(1)
+    finally:
+        if input_pdb and os.path.exists(input_pdb):
+            os.remove(input_pdb)
+
+    if not os.path.exists(rsa_file):
         print("No .rsa file created. Please check you have Freesasa installed. Go to 'http://freesasa.github.io/' ")
         exit(1)
-        
-    #try:
+
     SA_res = {}
-    with open(prot[:-4]+".rsa") as rsa:
+    with open(rsa_file) as rsa:
         for line in rsa:
-            if line.startswith("RES"):
-                col = line.split()
-                RES = line[4:8].strip()
-                CHAIN = line[8:9].strip()
-                if len(CHAIN) == 0:
-                    CHAIN = " "
-                NUM = line[9:13].strip()
-                REL = line[23:29].strip()
-                if float(REL) > 7.0:
-                    
-                    res = RES + CHAIN + NUM
-                    SA_res[(int(NUM),CHAIN,RES)] = True
-    #except:
-    #    print "error"
+            parsed = parse_rsa_line(line)
+            if parsed:
+                NUM, CHAIN, RES, REL = parsed
+                if REL > 7.0:
+                    SA_res[(NUM,CHAIN,RES)] = True
+
     SA_res_dict = {}
     
     for s in aa1_CA:
