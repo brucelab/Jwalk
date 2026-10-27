@@ -1,0 +1,21 @@
+#!/bin/bash
+# Runs Jwalk from this checkout in its own venv (src/venv) with NumPy + Biopython.
+#
+# Create the venv once with:
+#     python3 -m venv src/venv
+#     src/venv/bin/pip install -r requirements.txt
+#
+# Then run it from the directory with your .pdb files, e.g.
+#     /path/to/Jwalk/src/jwalk-launcher -i model.pdb
+# or link it onto your PATH:  ln -s /path/to/Jwalk/src/jwalk-launcher ~/bin/jwalk
+D="$(dirname "$(readlink -f "$0")")"
+
+if [ ! -x "$D/venv/bin/python" ]; then
+    echo "jwalk: no virtual environment found at $D/venv" >&2
+    echo "Create it with:" >&2
+    echo "    python3 -m venv $D/venv" >&2
+    echo "    $D/venv/bin/pip install -r $D/../requirements.txt" >&2
+    exit 1
+fi
+
+PYTHONPATH="$D" exec "$D/venv/bin/python" "$D/Jwalk/jwalk" "$@"
