@@ -36,7 +36,10 @@ type "jwalk" plus any of the below flags:
   -xl_list XL_LIST  calculate crosslinks from input list (see Examples)
   -i I              specify input pdb: -i <inputfile.pdb>   (default runs on every .pdb in directory)
   -aa1 AA1          specify starting amino-acid via three letter code eg. HIS
-  -aa2 AA2          specify starting amino-acid via three letter code eg. TYR
+  -aa2 AA2          specify ending amino-acid via three letter code eg. TYR (give both)
+  -max_dist N       maximum crosslink distance in Angstroms, a whole number (default 60)
+  -vox N            voxel size of the grid in Angstroms, a whole number of at least 1 (default 1)
+  -ncpus N          number of cpus to use (default: all)
   -surface          use higher accuracy method to calculate solvent accessibility - slower
                     needs the freesasa command on your PATH (FreeSASA 2.0 or 2.1,
                     http://freesasa.github.io/); with -ligand, freesasa also sees the ligands
@@ -44,6 +47,8 @@ type "jwalk" plus any of the below flags:
                     obstacles in the solvent accessible surface (default: HETATM ignored)
                     see docs/20261027-ligand-mode.md for what is included and how atoms
                     are sized
+
+A value that isn't a whole number for -vox, -max_dist or -ncpus is reported as a usage error.
 
 if no flags are added, Jwalk will calculate the SASDs between all lysine residues on
 every .pdb file in the directory.
