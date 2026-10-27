@@ -147,7 +147,29 @@ All runs used `Jwalk/src/jwalk-launcher` (Python 3.12, NumPy 2.5.4, Biopython 1.
 * **Grid sized from all atoms.** See "The grid moves" above.
 * **No `-water` flag.** `read_PDB_file(water=True)` exists; nothing exposes it.
 * **Radii for metals.** All use the carbon default. A per-element table (ionic or vdW) could be added to the `radius` dictionary if someone needs it.
-* **No ligand-in-a-channel example file.** The phosphorus test above was built by hand; `Examples/` still has no file where a ligand sits on a crosslink path.
+
+## Example file and tests
+
+### `Examples/test_ligand.pdb`
+
+`test.pdb` with its selenates, mercaptoethanols and waters removed and a synthetic phosphate (`PO4 A 900`: P at 29.12, 13.96, 18.94 A with four oxygens 1.53 A away) placed on a voxel of the solvent path between LYS 26 and LYS 125. Because the phosphate lies inside the protein's bounding box, the grid is the same with and without `-ligand`, so the difference between the two runs is the ligand alone:
+
+* without `-ligand`: 66 SASDs, identical to `test.pdb`;
+* with `-ligand`: 10 of the 66 get longer, by 1.2 A (21-119) to 8.2 A (86-135); 26-125 goes from 24.02 to 27.56 A. None get shorter.
+
+```
+cd Examples && ../src/jwalk-launcher -i test_ligand.pdb -ligand
+```
+
+### `tests/test_ligand.py`
+
+A `unittest` module (no pytest needed). From the `Jwalk` directory:
+
+```
+src/venv/bin/python -m unittest discover -s tests -v
+```
+
+27 tests in about 3 s, covering: hetero atoms read with and without `hetatm` and water left out; the element being read; the sphere each element gets (protein elements unchanged, P/Se/F/Cl, metals on the default, H/D skipped, the no-element fallback); `test_ligand.pdb` run in process (matches `test.pdb` without the ligand, grid origin unchanged, only lengthening, 26-125 longer by more than 2 A); the command line with `-ligand` and `-h`; the `.rsa` parser on both FreeSASA layouts, blank chain, `N/A`, insertion codes and the bundled `Examples/test.rsa`; and, when `freesasa` is on the `PATH`, `-surface`, `-surface -ligand` (ligand in the `.rsa`, no water, temporary file removed) and replacement of a stale `.rsa`. The freesasa tests are skipped otherwise.
 
 ## Reproducing
 

@@ -48,6 +48,11 @@ type "jwalk" plus any of the below flags:
 if no flags are added, Jwalk will calculate the SASDs between all lysine residues on
 every .pdb file in the directory.
 
+Examples/test_ligand.pdb has a phosphate on the path between two lysines: run it with
+and without -ligand to see the effect. tests/test_ligand.py checks ligand mode:
+
+  src/venv/bin/python -m unittest discover -s tests -v
+
 CROSSLINK LIST INPUT:
 
 Crosslinks should be listed in a pipe-delimited .txt file as so:
