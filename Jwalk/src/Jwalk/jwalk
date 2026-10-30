@@ -39,7 +39,7 @@ xl_list = []
 aa1 = "LYS"
 aa2 = "LYS"
 ncpus = cpu_count()
-pdb_list = [i for i in os.listdir('./') if i.endswith('.pdb')]
+pdb_list = [i for i in os.listdir('./') if i.lower().endswith(('.pdb',) + PDBTools.MMCIF_EXTENSIONS)]
 
 amino_acids = {"LYS":"lysines",
                 "CYS":"cysteines",
@@ -69,7 +69,7 @@ parser.add_argument('-lys', action="store_true",
 parser.add_argument('-xl_list', nargs=1,
 					help='calculate crosslinks from input list')
 parser.add_argument('-i', nargs=1,
-					help='specify input pdb: -i <inputfile.pdb>')
+					help='specify input structure, PDB or mmCIF: -i <inputfile.pdb> or -i <inputfile.cif>')
 parser.add_argument('-aa1', nargs=1,
 					help='specify start amino acid (three letter code e.g. LYS)')
 parser.add_argument('-aa2', nargs=1,
@@ -141,7 +141,7 @@ def runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list, ligand=
 			aa1: starting residue type
 			aa2: ending residues type
 			ncpus: number of cpus to use
-			pdb_list: default is all pdbs in directory, unless otherwise stated
+			pdb_list: default is every .pdb, .cif and .mmcif file in the directory, unless otherwise stated
 			ligand: if True include non-water HETATM records when building the surface
                 
     """
@@ -182,7 +182,7 @@ def runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list, ligand=
     
         # remove duplicates
         sasds = GridTools.remove_duplicates(sasds)
-        sasds = SASDTools.get_euclidean_distances(sasds, pdb, aa1, aa2)
+        sasds = SASDTools.get_euclidean_distances(sasds, pdb, aa1, aa2, structure_instance)
             
         # output sasds to .pdb file and .txt file
         PDBTools.write_sasd_to_txt(sasds, pdb)

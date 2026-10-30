@@ -31,7 +31,7 @@ With `-ligand`, every residue whose Biopython hetfield starts with `H` is read: 
 ### What `-ligand` does *not* change
 
 * Crosslink sites are still chosen by residue name against `-aa1`/`-aa2` or the `-xl_list`. A modified lysine written as `HETATM` (for example LLP) becomes an obstacle but is not treated as a LYS for crosslinking.
-* `get_euclidean_distances` re-reads the file and takes only `ATOM` records named `CA`, so a calcium ion (`HETATM`, name `CA`) is never mistaken for an alpha carbon.
+* `get_euclidean_distances` takes only `ATOM` records named `CA` (from the structure in memory since mmCIF input was added; it used to re-read the file), so a calcium ion (`HETATM`, name `CA`) is never mistaken for an alpha carbon.
 
 ### `-ligand` with `-surface`
 

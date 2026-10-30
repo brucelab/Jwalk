@@ -34,7 +34,8 @@ type "jwalk" plus any of the below flags:
   -h, --help        show this help message and exit
   -lys              calculate lysine crosslinks (default)
   -xl_list XL_LIST  calculate crosslinks from input list (see Examples)
-  -i I              specify input pdb: -i <inputfile.pdb>   (default runs on every .pdb in directory)
+  -i I              specify input structure, PDB or mmCIF: -i <inputfile.pdb> or -i <inputfile.cif>
+                    (default runs on every .pdb, .cif and .mmcif file in the directory)
   -aa1 AA1          specify starting amino-acid via three letter code eg. HIS
   -aa2 AA2          specify ending amino-acid via three letter code eg. TYR (give both)
   -max_dist N       maximum crosslink distance in Angstroms, a whole number (default 60)
@@ -51,7 +52,18 @@ type "jwalk" plus any of the below flags:
 A value that isn't a whole number for -vox, -max_dist or -ncpus is reported as a usage error.
 
 if no flags are added, Jwalk will calculate the SASDs between all lysine residues on
-every .pdb file in the directory.
+every .pdb, .cif and .mmcif file in the directory.
+
+INPUT FORMATS:
+
+PDB and mmCIF files are read alike (Biopython; chains and residue numbers are the author ones,
+auth_asym_id and auth_seq_id, so mmCIF gives the same identifiers as the equivalent PDB). mmCIF
+has no limit on the number of chains or the length of a chain id, and the modified residues of a
+chain (MSE, PSU, OMG, ...), which are HETATM records, are always part of the structure because
+the file says which residues belong to a chain. Ligands and ions still need -ligand. A PDB file
+cannot tell a modified residue from a ligand, so there HETATM records are ligands. Results are
+written under the file's base name (9syg.cif -> Jwalk_results/9syg_crosslink_list.txt).
+See docs/20261030-mmcif-input.md.
 
 Examples/test_ligand.pdb has a phosphate on the path between two lysines: run it with
 and without -ligand to see the effect. tests/test_ligand.py checks ligand mode:

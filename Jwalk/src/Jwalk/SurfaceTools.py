@@ -23,8 +23,10 @@
 import sys
 from math import cos, sin
 import subprocess
+from Jwalk import PDBTools
 import os
 import re
+import string
 
 def expand_points(atom,sphere):
     """ Exapnd the unit sphere around specific x,y,z point and returns surface points"""
@@ -204,7 +206,23 @@ def update_crosslink_pairs(crosslink_pairs, aa1_CA, aa2_CA, remove_aa1, remove_a
                     
     return crosslink_pairs_final
     
-def parse_rsa_line(line):
+def rsa_words(residues):
+
+    """
+
+    Returns {(residue name, chain + residue number): (res_no, chain, res)} for the residues of
+    interest, the form in which a freesasa .rsa made from an mmCIF file names a residue.
+
+    Arguments:
+
+       *residues*
+           {(res_no, chain, res) : ...}
+
+    """
+
+    return dict(((res, chain.strip() + str(num)), (num, chain, res)) for (num, chain, res) in residues)
+
+def parse_rsa_line(line, words=None):
 
     """
 
@@ -218,10 +236,16 @@ def parse_rsa_line(line):
     RES LYS A 21 ABS REL ... (14 fields), without one RES LYS 21 ABS REL ... (13 fields).
     An insertion code on the residue number is dropped, as it is everywhere else in Jwalk.
 
+    With mmCIF input freesasa runs the chain label and the residue number together (A022 is
+    residue 22 of chain A0). Such a line is matched against words, the output of rsa_words for
+    the residues of interest, first as written and then without a trailing insertion code.
+
     Arguments:
 
        *line*
            one line of the .rsa file
+       *words*
+           output of rsa_words, for a .rsa made from an mmCIF file
 
     """
 
@@ -229,6 +253,16 @@ def parse_rsa_line(line):
         return None
 
     col = line.split()
+
+    if words and len(col) == 13:
+        word = col[2]
+        key = (col[1], word) if (col[1], word) in words else (col[1], word.rstrip(string.ascii_letters))
+        if key in words:
+            num, chain, name = words[key]
+            try:
+                return num, chain, name, float(col[4])
+            except ValueError:
+                return None
 
     if len(col) == 14:
         name, chain, num, rel = col[1], col[2], col[3], col[5]
@@ -277,7 +311,7 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
     Arguments:
 
        *prot*
-           .pdb file
+           .pdb or .cif file
        *aa1_CA*
            residues of interest {(res_no, chain, res) : CA voxel}
        *freesasa_source*
@@ -321,7 +355,16 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
 
     cmd = [freesasa_source,"--format=rsa","--output=%s" % rsa_file,"--radii=naccess"]
 
-    if hetatm:
+    mmcif = PDBTools.is_mmcif(prot)
+
+    if mmcif:
+        # freesasa reads mmCIF with --cif. It is given a copy holding exactly the atoms of Jwalk's
+        # grid (the chains with their modified residues, ligands only with -ligand, no water) and
+        # --hetatm so that it counts the HETATM rows that are left.
+        input_pdb = os.path.splitext(prot)[0] + "_jwalk.cif"
+        PDBTools.write_mmcif_for_surface(prot, input_pdb, hetatm)
+        cmd += ["--cif", "--hetatm", input_pdb]
+    elif hetatm:
         # freesasa --hetatm would also count water, which -ligand leaves out of the grid
         input_pdb = os.path.splitext(prot)[0] + "_nowater.pdb"
         write_pdb_without_water(prot, input_pdb)
@@ -344,10 +387,14 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
         print("No .rsa file created. Please check you have Freesasa installed. Go to 'http://freesasa.github.io/' ")
         exit(1)
 
+    # for an mmCIF file freesasa writes the chain label and residue number as one word (A022 for
+    # residue 22 of chain A0), so the residues of interest are looked up by that word
+    words = rsa_words(aa1_CA) if mmcif else {}
+
     SA_res = {}
     with open(rsa_file) as rsa:
         for line in rsa:
-            parsed = parse_rsa_line(line)
+            parsed = parse_rsa_line(line, words)
             if parsed:
                 NUM, CHAIN, RES, REL = parsed
                 if REL > 7.0:

@@ -599,23 +599,48 @@ def calculate_distance(cords):
     ''' Calculates the distance of points in 3d, input e.g. [[x1,y1,z1],[x2,y2,z3]] '''
     return math.sqrt(((cords[0][0]-cords[1][0])**2)+((cords[0][1]-cords[1][1])**2)+((cords[0][2]-cords[1][2])**2))
 
-def get_euclidean_distances(sasds, pdb, aa1, aa2):
+def get_euclidean_distances(sasds, pdb, aa1, aa2, structure=None):
 
-    residues = {}
-    with open (pdb) as inf:
-        for line in inf:
-            if line.startswith('ATOM') and (line[12:16].strip() == 'CA'):
-                if line[21:22].strip() == "":
-                    chain = " "
-                else:
-                    chain = line[21:22].strip()
-                residues[line[22:26].strip(),chain] = [float(line[30:38].strip()),
-                float(line[38:46].strip()),
-                float(line[46:54].strip())]
-    
+    """
+
+    Adds the Euclidean distance between the C-alpha atoms of each sasd to its key.
+
+    Returns {(start res, end res, sasd, euclidean distance): path}.
+
+    Arguments:
+
+       *sasds*
+           dictionary of sasds {(start res, end res, sasd): path}
+       *pdb*
+           the input file
+       *aa1*, *aa2*
+           residue types (unused)
+       *structure*
+           the BioPy_Structure the sasds were calculated on. If given, the C-alpha coordinates
+           come from it, which works for any input format; otherwise the file is read as a PDB.
+           Either way the coordinates are the 3 decimals of the file.
+
+    """
+
     coords = {}
-    for k,v in residues.items():
-        coords[int(k[0]),k[1]] = v
+    if structure is not None:
+        for atom in structure.atomList:
+            if atom.record_name == 'ATOM' and atom.atom_name == 'CA':
+                coords[atom.res_no, atom.chain] = [round(atom.x, 3), round(atom.y, 3), round(atom.z, 3)]
+    else:
+        residues = {}
+        with open (pdb) as inf:
+            for line in inf:
+                if line.startswith('ATOM') and (line[12:16].strip() == 'CA'):
+                    if line[21:22].strip() == "":
+                        chain = " "
+                    else:
+                        chain = line[21:22].strip()
+                    residues[line[22:26].strip(),chain] = [float(line[30:38].strip()),
+                    float(line[38:46].strip()),
+                    float(line[46:54].strip())]
+        for k,v in residues.items():
+            coords[int(k[0]),k[1]] = v
 
     sasds_and_eucs = {}
     
