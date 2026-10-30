@@ -41,7 +41,7 @@ type "jwalk" plus any of the below flags:
   -max_dist N       maximum crosslink distance in Angstroms, a whole number (default 60)
   -vox N            voxel size of the grid in Angstroms, a whole number of at least 1 (default 1)
   -ncpus N          number of cpus to use (default: all)
-  -includebugs      reproduce the output of the original Jwalk (before this fork): its path
+  -includebugs      reproduce the output of the original Jwalk (commit 72fac51): its path
                     extraction, which overestimates a SASD when two residues share a surface
                     voxel, and its surface spheres chosen by the first letter of the atom name
                     (so with -ligand, P and metal atoms get no sphere). For comparing with old
