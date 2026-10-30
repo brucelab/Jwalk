@@ -5,7 +5,7 @@
 #     python3 -m venv src/venv
 #     src/venv/bin/pip install -r requirements.txt
 #
-# Then run it from the directory with your .pdb files, e.g.
+# Then run it from the directory with your .pdb or .cif files, e.g.
 #     /path/to/Jwalk/src/jwalk-launcher -i model.pdb
 # or link it onto your PATH:  ln -s /path/to/Jwalk/src/jwalk-launcher ~/bin/jwalk
 D="$(dirname "$(readlink -f "$0")")"

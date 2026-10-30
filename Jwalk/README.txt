@@ -23,7 +23,13 @@
 INSTALLATION:
 Open a terminal session and a move to the directory Jwalk is in.
 
-type "setup.py install"
+Create a virtual environment with the requirements (Python 3.8 or newer), from the
+Jwalk directory:
+
+  python3 -m venv src/venv
+  src/venv/bin/pip install -r requirements.txt
+
+then run src/jwalk-launcher in place of "jwalk" below. See docs/20261027_launcher.md.
 
 RUNNING JWALK:
 
@@ -49,8 +55,10 @@ type "jwalk" plus any of the below flags:
   -surface          use higher accuracy method to calculate solvent accessibility - slower
                     needs the freesasa command on your PATH (FreeSASA 2.0 or 2.1,
                     http://freesasa.github.io/); with -ligand, freesasa also sees the ligands
-  -ligand           treat non-water HETATM records (ligands, ions, modified residues) as
-                    obstacles in the solvent accessible surface (default: HETATM ignored)
+  -ligand           treat non-water HETATM records (ligands, ions, cofactors) as obstacles
+                    in the solvent accessible surface (default: HETATM ignored). With PDB input
+                    this includes modified residues (MSE, ...); from mmCIF the modified residues
+                    of a chain are always included, with or without -ligand
                     see docs/20261027-ligand-mode.md for what is included and how atoms
                     are sized
 
@@ -83,9 +91,12 @@ res1|chain1|res2|chain2|
 
 eg. 34|A|56|B|
 
-If your pdb file has no chain, insert a lowercase x
+If your pdb file has no chain, leave the chain fields empty
 
-eg. 34|x|56|x|
+eg. 34||56||
+
+(a lowercase x is looked up as a chain named x and finds nothing). mmCIF input always has
+chains (auth_asym_id), so this applies to PDB files only.
 
 See the example file for a sample list.
 

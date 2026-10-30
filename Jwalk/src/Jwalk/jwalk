@@ -82,7 +82,7 @@ parser.add_argument('-vox', nargs=1, type=int,
 parser.add_argument('-surface', action="store_true",
 					help='use higher accuracy method to calculate solvent accessibility - requires Freesasa installation')
 parser.add_argument('-ligand', action="store_true",
-					help='treat non-water HETATM records (ligands, ions) as obstacles in the solvent accessible surface; modified residues of a chain are always included from mmCIF input, and need this flag from PDB input')
+					help='treat non-water HETATM records (ligands, ions) as obstacles in the solvent accessible surface (needed for ligands and ions from both PDB and mmCIF input); modified residues (MSE, ...) need this flag from PDB input but are always included from mmCIF input')
 parser.add_argument('-includebugs', action="store_true",
 					help='reproduce the output of the original Jwalk (commit 72fac51): its path extraction, which overestimates a SASD when two residues share a surface voxel, and its surface spheres chosen by the first letter of the atom name (with -ligand, P and metals then get no sphere)')
 parser.add_argument('-ncpus', nargs=1, type=int,

@@ -4,7 +4,7 @@ How Jwalk treats ligands, ions and other `HETATM` records, the `-ligand` flag th
 
 ## Background
 
-Jwalk reads a PDB file with Biopython and separates the residues into three groups: protein (`ATOM` records), hetero residues (`HETATM` records: ligands, ions, cofactors, modified residues such as MSE) and waters. `PDBTools.read_PDB_file(filename, hetatm=False, water=False)` has always had the switches to include the last two groups, but `jwalk` never passed them, so hetero atoms were always dropped. A ligand sitting in a channel between two lysines was therefore invisible to the path search and the SASD could run straight through it.
+Jwalk reads a PDB file with Biopython and separates the residues into three groups: protein (`ATOM` records), hetero residues (`HETATM` records: ligands, ions, cofactors, modified residues such as MSE) and waters. `PDBTools.read_PDB_file(filename, hetatm=False, water=False)` has always had the switches to include the last two groups, but `jwalk` never passed them, so hetero atoms were always dropped. (From mmCIF input this is no longer quite true: the modified residues of a chain, such as MSE, are always read, whatever `hetatm` is, because the file says which residues belong to a chain; ligands and ions still need `-ligand`. Everything below describes PDB input unless it says otherwise; see `20261030-mmcif-input.md`.) A ligand sitting in a channel between two lysines was therefore invisible to the path search and the SASD could run straight through it.
 
 Users who wanted ligands counted had been editing `PDBTools.py` by hand to change the `hetatm=False` default. That is what `-ligand` replaces.
 
