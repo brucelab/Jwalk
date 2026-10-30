@@ -20,6 +20,11 @@ The first speed commit in brucelab (`4751170`) also contains the bug fix, so no 
 `opt_bugs` is a copy of HEAD whose `calculate_SASDs` mutates the shared end-voxel path and distance in
 place exactly as the original did.
 
+This report measures the finished code only. The step-by-step history of the nine optimization commits,
+the other fixes made afterwards and how each was verified, and the design notes on the hop-minimal
+search, ligands and the grid origin are in `20261026-performance-results.md`; `-ligand` itself is
+described in `20261027-ligand-mode.md`.
+
 ## Run time (16 CPUs; optimized = best of 2 runs, original = 1 run)
 
 | File | Atoms | SASDs | orig wall | opt_bugs wall | opt_fixed wall | Speedup | orig CPU | opt_fixed CPU | CPU speedup |
@@ -134,7 +139,8 @@ non-ligand runs. Row 5 is for scale: including ligands at all is a far larger ef
    `read_PDB_file` defaults to `hetatm=True`. Every other copy of the original (the Python 2 sources, the
    egg, the build directory, xlinkdb's own copy, brucelab `ba84b51`) defaults to `False`, and the Oct 26
    production results match `False`. The benchmark used `False`, which is the genuine original and also
-   the optimized default; the `jwalk` on PATH as installed today includes HETATM in the surface.
+   the optimized default. The edit was reverted at 12:23 on 2026-10-30, so the `jwalk` on PATH again
+   excludes HETATM.
 2. Five files begin with "1", not four: 12AH was included.
 3. The original was run once per structure; the optimized variants twice (best shown). The machine was
    otherwise idle (load < 0.5 before the runs).

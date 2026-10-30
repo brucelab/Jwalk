@@ -1,5 +1,11 @@
 # Jwalk performance results
 
+> **Timings on real structures are in `20261030-benchmark.md`.** The figures below were measured on a
+> 4,008-atom test structure on a loaded server; on production structures of 25k-236k atoms the finished
+> code is 21-23x faster than the original in wall and CPU time. This report remains the record of the
+> step-by-step history, the fixes other than the end-voxel path bug, and the design notes on the
+> hop-minimal search, ligands and the grid origin.
+
 Results of implementing the changes proposed in `20261026-performance.md`, one step at a time on the `optimize` branch. After every step the program was run on a set of test cases and its output compared with the previous step; the results below are from one final back-to-back measurement of the original code and every step.
 
 ## Summary
