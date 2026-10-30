@@ -89,6 +89,19 @@ distance locally per pair. This is the only fix that changes `jwalk -lys` output
 fixes (element reading, memory window, `-i dir/file.pdb`, blank `-xl_list` lines, `-vox` validation,
 FreeSASA 2.1 parsing) had no effect here, as the byte-identical `opt_bugs` vs `orig` result shows.
 
+### Reproducing the original's output: `-includebugs`
+
+The optimized code has a flag that gives the original's
+output without the original's run time: `jwalk -lys -includebugs`. It switches on the original path
+extraction (`SASDTools.original_shortest_paths`, the same emulation the `opt_bugs` variant above
+used) and the original's surface spheres chosen by the first letter of the atom name
+(`GridTools.generate_solvent_accessible_surface(..., legacy_spheres=True)`), so that with `-ligand`
+it also matches the hand-edited production tree of Oct 27 (P and metal atoms get no sphere).
+Checked on the benchmark outputs: `-includebugs` on 11YB.pdb is byte-identical to the original run,
+and `-includebugs -ligand` on 12AH.pdb is byte-identical to the original with `hetatm=True`
+(the Oct 27 production Ligand file). Everything else (speed, memory, mmCIF input, the crash fixes)
+stays.
+
 ## 7OHR (235,845 atoms, 51 chains, 50,893 SASDs), both codes at 6 CPUs
 
 | Run | CPUs | Wall | CPU (all workers) | Largest process RSS |

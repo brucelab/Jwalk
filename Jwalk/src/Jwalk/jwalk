@@ -35,6 +35,7 @@ max_dist = 60
 vox = 1
 surface = False
 ligand = False
+includebugs = False
 xl_list = []
 aa1 = "LYS"
 aa2 = "LYS"
@@ -82,6 +83,8 @@ parser.add_argument('-surface', action="store_true",
 					help='use higher accuracy method to calculate solvent accessibility - requires Freesasa installation')
 parser.add_argument('-ligand', action="store_true",
 					help='treat non-water HETATM records (ligands, ions, modified residues) as obstacles in the solvent accessible surface')
+parser.add_argument('-includebugs', action="store_true",
+					help='reproduce the output of the original Jwalk: its path extraction, which overestimates a SASD when two residues share a surface voxel, and its surface spheres chosen by the first letter of the atom name (with -ligand, P and metals then get no sphere)')
 parser.add_argument('-ncpus', nargs=1, type=int,
 					help='specify number of cpus to use')
 
@@ -125,12 +128,15 @@ if args.surface:
 if args.ligand:
 	ligand = True
 
+if args.includebugs:
+	includebugs = True
+
 if args.ncpus:
 	ncpus = int(args.ncpus[0])
 
 #######################################
 
-def runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list, ligand=False):
+def runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list, ligand=False, includebugs=False):
     """
         Execute Jwalk with processed command line options
 			
@@ -143,6 +149,7 @@ def runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list, ligand=
 			ncpus: number of cpus to use
 			pdb_list: default is every .pdb, .cif and .mmcif file in the directory, unless otherwise stated
 			ligand: if True include non-water HETATM records when building the surface
+			includebugs: if True reproduce the original Jwalk's path extraction and surface spheres
                 
     """
     for pdb in pdb_list:
@@ -169,7 +176,8 @@ def runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list, ligand=
             else:
                 aa2_CA = aa1_CA.copy()
                             
-        dens_map = GridTools.generate_solvent_accessible_surface(grid, structure_instance, aa1_CA, aa2_CA)    
+        dens_map = GridTools.generate_solvent_accessible_surface(grid, structure_instance, aa1_CA, aa2_CA,
+                                                                 legacy_spheres=includebugs)
         # identify which residues are on the surface
         aa1_voxels, remove_aa1 = GridTools.find_surface_voxels(aa1_CA, dens_map, surface, xl_list)
         aa2_voxels, remove_aa2 = GridTools.find_surface_voxels(aa2_CA, dens_map, surface, xl_list)
@@ -178,7 +186,7 @@ def runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list, ligand=
         
         # calculate sasds
         sasds = SASDTools.parallel_BFS(aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA, crosslink_pairs, 
-                                       max_dist, vox, ncpus, xl_list)
+                                       max_dist, vox, ncpus, xl_list, original=includebugs)
     
         # remove duplicates
         sasds = GridTools.remove_duplicates(sasds)
@@ -190,4 +198,4 @@ def runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list, ligand=
         print(len(sasds), "SASDs calculated")
             
 if __name__ == "__main__":
-    runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list, ligand)
+    runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list, ligand, includebugs)

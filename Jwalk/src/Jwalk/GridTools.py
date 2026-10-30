@@ -326,7 +326,7 @@ def atom_element(atom):
         return elem
     return atom.atom_name[:1].upper()
 
-def generate_solvent_accessible_surface(densMap,prot,aa1_CA, aa2_CA):
+def generate_solvent_accessible_surface(densMap,prot,aa1_CA, aa2_CA, legacy_spheres=False):
     
     """
     
@@ -342,6 +342,10 @@ def generate_solvent_accessible_surface(densMap,prot,aa1_CA, aa2_CA):
            voxel positions of each C_alpha atom of interest
         *aa2_CA*
            voxel positions of each C_alpha atom of interest
+        *legacy_spheres*
+           choose the sphere as the original Jwalk did (-includebugs): from the first letter of
+           the atom name, C, N, O and S only, and no sphere at all for any other atom (P, Se,
+           metals, ...). For protein atoms this is the same as the element rule.
            
     """
     # radius of each element. C, N, O and S are the values Jwalk has always used; the others
@@ -388,9 +392,14 @@ def generate_solvent_accessible_surface(densMap,prot,aa1_CA, aa2_CA):
             (atom.res_no,atom.chain,atom.res) in aa2_CA and atom.atom_name not in backbone):
                 pass
             else:
-                elem = atom_element(atom)
-                if elem not in hydrogens:
-                    centres.setdefault(voxel_radius(elem), []).append(pos[:3])
+                if legacy_spheres:
+                    elem = atom.atom_name[:1].upper()
+                    if elem in ('C', 'N', 'O', 'S'):
+                        centres.setdefault(voxel_radius(elem), []).append(pos[:3])
+                else:
+                    elem = atom_element(atom)
+                    if elem not in hydrogens:
+                        centres.setdefault(voxel_radius(elem), []).append(pos[:3])
 
     # for each atom, expand the corresponding voxel sphere around it to create solvent accessible surface
     z_size, y_size, x_size = densMap.fullMap.shape

@@ -316,6 +316,94 @@ def shortest_path(start_residue, end_residue, end_voxels, search, aa1_CA, aa2_CA
 
     return shortest_distance, path
 
+def original_shortest_paths(start_residue, aa2_voxels, search, aa1_CA, aa2_CA):
+
+    '''
+
+    The path extraction of the original Jwalk, for -includebugs. Returns a list of
+    (end residue, length in angstroms, voxel path) in the order of aa2_voxels, one for every end
+    residue that was reached.
+
+    The original kept one path list and one distance per voxel, shared by every end residue, and
+    changed them in place each time the voxel was examined: the start C-alpha was inserted at the
+    front, the end C-alpha appended at the back, and the two C-alpha links added to the distance.
+    When two end residues share a surface voxel the second one therefore sees a path with a
+    duplicated C-alpha at each end and a distance that is too long, and may choose a longer route;
+    a path already chosen for an earlier residue also grows by two atoms. This function does the
+    same, so that the optimized code gives the original's output byte for byte.
+
+    Arguments:
+
+       *start_residue*
+           key of aa1_CA
+       *aa2_voxels*
+           dictionary containing ending voxels {end_residue : ending voxels}
+       *search*
+           output of breadth_first_search
+       *aa1_CA*
+           dictionary containing voxel of C-alpha
+       *aa2_CA*
+           dictionary containing voxel of C-alpha
+
+    '''
+
+    visited, parent, root, distance, window = search
+    x_0, y_0, z_0, x_size, y_size, z_size = window
+    sx = x_size + 2
+    sy = y_size + 2
+
+    def unflatten(p):
+        r, x = divmod(p, sx)
+        z, y = divmod(r, sy)
+        return [x - 1 + x_0, y - 1 + y_0, z - 1 + z_0]
+
+    shared_paths = {} # flat voxel index -> [path list (changed in place), distance]
+    results = []
+
+    for end_residue in aa2_voxels:
+        if start_residue != end_residue:
+            shortest_distance = 9999
+            all_distances = {}
+
+            for (x, y, z) in aa2_voxels[end_residue]:
+
+                if not (x_0 <= x < x_0 + x_size and y_0 <= y < y_0 + y_size and z_0 <= z < z_0 + z_size):
+                    continue
+
+                p = ((z - z_0 + 1) * sy + (y - y_0 + 1)) * sx + (x - x_0 + 1)
+
+                if visited[p]:
+
+                    if p not in shared_paths:
+                        path = []
+                        q = p
+                        while q != -1:
+                            path.append(unflatten(q))
+                            q = int(parent[q])
+                        path.reverse()
+                        shared_paths[p] = [path, float(distance[p])]
+
+                    entry = shared_paths[p]
+                    path = entry[0]
+                    path.insert(0, aa1_CA[start_residue]) # add aa1 CA voxel to path
+                    path.append(aa2_CA[end_residue]) # add aa2 CA voxel to end of path
+
+                    # add the distance between starting/ending residue CA voxel and start/end voxel in path
+                    for i in [1, len(path) - 1]:
+                        (x_1, y_1, z_1) = path[i - 1]
+                        (x_2, y_2, z_2) = path[i]
+                        entry[1] += math.sqrt((x_1 - x_2) ** 2 + (y_1 - y_2) ** 2 + (z_1 - z_2) ** 2)
+
+                    all_distances[entry[1]] = path # linking distance:path
+
+                    if shortest_distance > entry[1]:
+                        shortest_distance = entry[1]
+
+            if shortest_distance != 9999:
+                results.append((end_residue, shortest_distance, all_distances[shortest_distance]))
+
+    return results
+
 def calculate_specific_SASDs(start_residue, end_residues, aa1_voxels, aa2_voxels, dens_map,
                              aa1_CA, aa2_CA, max_dist, vox, grid=None):
 
@@ -421,7 +509,7 @@ def calculate_specific_SASD(single_crosslink, aa1_voxels, aa2_voxels, dens_map, 
 
 
 def calculate_SASDs(start_residue, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA,
-                    max_dist, vox, grid=None, targets=None):
+                    max_dist, vox, grid=None, targets=None, original=False):
 
     """
 
@@ -456,6 +544,8 @@ def calculate_SASDs(start_residue, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2
            output of prepare_grid, made from dens_map and vox if not given
        *targets*
            output of prepare_targets for all of aa2_voxels, made if not given
+       *original*
+           extract the paths as the original Jwalk did (see original_shortest_paths)
 
 
     """
@@ -470,41 +560,44 @@ def calculate_SASDs(start_residue, aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2
 
     # now we have the paths into empty space starting from start_residue, all stored in search.
     # Now need to extract paths to specific residues
-    for end_residue in aa2_voxels:
-        if start_residue != end_residue:
+    if original:
+        found = original_shortest_paths(start_residue, aa2_voxels, search, aa1_CA, aa2_CA)
+    else:
+        found = []
+        for end_residue in aa2_voxels:
+            if start_residue != end_residue:
+                shortest = shortest_path(start_residue, end_residue, aa2_voxels[end_residue], search,
+                                         aa1_CA, aa2_CA)
+                if shortest:
+                    found.append((end_residue,) + shortest)
 
-            shortest = shortest_path(start_residue, end_residue, aa2_voxels[end_residue], search,
-                                     aa1_CA, aa2_CA)
-
-            # add shortest distance sasd to output dictionary
-
-            if shortest:
-                shortest_distance, path = shortest
-                if start_residue[1] < end_residue[1]:  # this to order the dict so that chain goes alphabetically
-                    sasds[start_residue, end_residue, shortest_distance] = path
-                elif end_residue[1] < start_residue[1]:
-                    sasds[end_residue, start_residue, shortest_distance] = path
-                # if both on the same chain, then ordered to go numerically
-                elif start_residue[0] < end_residue[0]:
-                    sasds[start_residue, end_residue, shortest_distance] = path
-                else:
-                    sasds[end_residue, start_residue, shortest_distance] = path
+    # add shortest distance sasd to output dictionary
+    for end_residue, shortest_distance, path in found:
+        if start_residue[1] < end_residue[1]:  # this to order the dict so that chain goes alphabetically
+            sasds[start_residue, end_residue, shortest_distance] = path
+        elif end_residue[1] < start_residue[1]:
+            sasds[end_residue, start_residue, shortest_distance] = path
+        # if both on the same chain, then ordered to go numerically
+        elif start_residue[0] < end_residue[0]:
+            sasds[start_residue, end_residue, shortest_distance] = path
+        else:
+            sasds[end_residue, start_residue, shortest_distance] = path
 
     return sasds
 
 # data shared by every task, set once per worker process so it is not pickled with each task
 shared = {}
 
-def init_worker(grid, targets, aa1_voxels, aa2_voxels, aa1_CA, aa2_CA, max_dist):
+def init_worker(grid, targets, aa1_voxels, aa2_voxels, aa1_CA, aa2_CA, max_dist, original=False):
     """Store the data shared by every task in the worker process."""
     shared.update(grid=grid, targets=targets, aa1_voxels=aa1_voxels, aa2_voxels=aa2_voxels,
-                  aa1_CA=aa1_CA, aa2_CA=aa2_CA, max_dist=max_dist)
+                  aa1_CA=aa1_CA, aa2_CA=aa2_CA, max_dist=max_dist, original=original)
 
 def calculate_SASDs_task(start_residue):
     """Run calculate_SASDs for one start residue using the shared data."""
     return calculate_SASDs(start_residue, shared['aa1_voxels'], shared['aa2_voxels'], None,
                            shared['aa1_CA'], shared['aa2_CA'], shared['max_dist'], None,
-                           grid=shared['grid'], targets=shared['targets'])
+                           grid=shared['grid'], targets=shared['targets'], original=shared['original'])
 
 def calculate_specific_SASDs_task(crosslinks):
     """Run calculate_specific_SASDs for a start residue and its end residues using the shared data."""
@@ -514,7 +607,7 @@ def calculate_specific_SASDs_task(crosslinks):
                                     shared['max_dist'], None, grid=shared['grid'])
 
 def parallel_BFS(aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA, crosslink_pairs,
-                 max_dist, vox, ncpus, xl_list):
+                 max_dist, vox, ncpus, xl_list, original=False):
     
     """
     
@@ -546,6 +639,9 @@ def parallel_BFS(aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA, crosslink_pai
            number of angstoms per voxel
        *ncpus*
            number of allocated cpus
+       *original*
+           extract the paths as the original Jwalk did (-includebugs). Only the all-pairs search
+           is affected: with a crosslink list the original and the current extraction agree.
            
     """ 
     
@@ -570,7 +666,7 @@ def parallel_BFS(aa1_voxels, aa2_voxels, dens_map, aa1_CA, aa2_CA, crosslink_pai
         residues = list(aa1_voxels)
         targets = prepare_targets(aa2_voxels.values())
 
-    initargs = (grid, targets, aa1_voxels, aa2_voxels, aa1_CA, aa2_CA, max_dist)
+    initargs = (grid, targets, aa1_voxels, aa2_voxels, aa1_CA, aa2_CA, max_dist, original)
 
     if ncpus > 1:
         # results come back in the order of residues so the output order doesn't depend on timing
