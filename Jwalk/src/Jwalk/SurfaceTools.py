@@ -217,8 +217,8 @@ def rsa_words(residues, labels=None):
 
     The chain is the label the chain was given in the file freesasa read (PDBTools.
     write_mmcif_for_surface); the labels all have one length, so a word names one residue. Without
-    labels the chain itself is used, and two residues can then have the same word (chain A0,
-    residue 22 and chain A02, residue 2).
+    labels the chain itself is used, which is only unambiguous if no two residues have the same
+    word (chain A0, residue 22 and chain A02, residue 2 do), and a ValueError is raised if two do.
 
     Arguments:
 
@@ -230,8 +230,12 @@ def rsa_words(residues, labels=None):
     """
 
     labels = labels or {}
-    return dict(((res, labels.get(chain, chain.strip()) + str(num)), (num, chain, res))
-                for (num, chain, res) in residues)
+    words = dict(((res, labels.get(chain, chain.strip()) + str(num)), (num, chain, res))
+                 for (num, chain, res) in residues)
+    if len(words) != len(set(residues)):
+        raise ValueError("two residues of interest have the same chain and number word in the .rsa file; "
+                         "give rsa_words the chain labels of PDBTools.write_mmcif_for_surface")
+    return words
 
 def parse_rsa_line(line, words=None):
 

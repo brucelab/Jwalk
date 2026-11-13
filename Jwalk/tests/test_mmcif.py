@@ -320,12 +320,19 @@ class ChainLabels(unittest.TestCase):
 
     def test_same_word_for_two_residues_without_labels(self):
         residues = {(22, "A0", "LYS"): None, (2, "A02", "LYS"): None}
-        self.assertEqual(len(SurfaceTools.rsa_words(residues)), 1)
+        with self.assertRaises(ValueError):
+            SurfaceTools.rsa_words(residues)
         labels = PDBTools.surface_chain_labels(["A0", "A02"])
         words = SurfaceTools.rsa_words(residues, labels)
         self.assertEqual(len(words), 2)
         self.assertEqual(words[("LYS", labels["A0"] + "22")], (22, "A0", "LYS"))
         self.assertEqual(words[("LYS", labels["A02"] + "2")], (2, "A02", "LYS"))
+
+    def test_chain_a_residue_12_and_chain_a1_residue_2(self):
+        residues = {(12, "A", "LYS"): None, (2, "A1", "LYS"): None}
+        labels = PDBTools.surface_chain_labels(["A", "A1"])
+        words = SurfaceTools.rsa_words(residues, labels)
+        self.assertEqual(sorted(words.values()), [(2, "A1", "LYS"), (12, "A", "LYS")])
 
     def test_copy_is_relabelled(self):
         directory = tempfile.mkdtemp(prefix="jwalk_test_")
