@@ -35,7 +35,7 @@ With `-ligand`, every residue whose Biopython hetfield starts with `H` is read: 
 
 ### `-ligand` with `-surface`
 
-`-surface` asks freesasa whether each residue of interest is solvent exposed (relative all-atom SASA above 7%) before the path search. With `-ligand`, Jwalk now runs freesasa with `--hetatm` so that it sees the same ligand atoms the grid does. freesasa's `--hetatm` would also count every water, which Jwalk leaves out, so Jwalk first writes a copy of the PDB without `HOH`/`WAT` residues (`<name>_nowater.pdb`, deleted after the run) and gives freesasa that. The `.rsa` file is written next to the PDB as before; its second line names the `_nowater` input so you can tell which mode produced it.
+`-surface` asks freesasa whether each residue of interest is solvent exposed (relative all-atom SASA above 7%) before the path search. With `-ligand`, Jwalk now runs freesasa with `--hetatm` so that it sees the same ligand atoms the grid does. freesasa's `--hetatm` would also count every water, which Jwalk leaves out, so Jwalk first writes a copy of the PDB without `HOH`/`WAT` residues (`<name>_nowater.pdb`, written to a temporary directory and deleted after the run) and gives freesasa that. The `.rsa` file is written next to the PDB as before; its second line names the `_nowater` input so you can tell which mode produced it.
 
 On `Examples/test.pdb` this lowers the relative SASA of the three lysines next to the ligands (119: 48.8 -> 41.2, 125: 18.0 -> 10.0, 135: 61.9 -> 42.7) and leaves the other nine unchanged; with water included as well they would drop much further (125 to 8.9, 77 from 30.8 to 13.0). All twelve are still above the 7% threshold here.
 

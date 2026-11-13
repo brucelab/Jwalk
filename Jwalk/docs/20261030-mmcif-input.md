@@ -97,7 +97,7 @@ is affected.
 
 ## `-surface` with mmCIF
 
-freesasa reads mmCIF with `--cif`. Jwalk gives it a copy of the file (`<name>_jwalk.cif`, removed
+freesasa reads mmCIF with `--cif`. Jwalk gives it a copy of the file (`<name>_jwalk.cif`, written to a temporary directory and removed
 afterwards) holding exactly the atoms of its grid: the chains with their modified residues,
 ligands only with `-ligand`, no water, and runs it with `--hetatm` so that the `HETATM` rows that
 are left are counted. For PDB input nothing changed.

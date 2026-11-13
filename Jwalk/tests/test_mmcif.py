@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 JWALK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_DIR = os.path.join(JWALK_DIR, "src")
@@ -302,6 +303,64 @@ class LongChainIds(unittest.TestCase):
         # the PDB layouts still parse when words is given
         self.assertEqual(SurfaceTools.parse_rsa_line("RES LYS A  21   102.55  42.4  85.10  54.0  17.45  17.0  58.87  73.7  43.68  26.9", words),
                          (21, "A", "LYS", 42.4))
+
+
+class SurfaceTempFiles(unittest.TestCase):
+    """The copies freesasa is given are written to a private directory, not next to the input.
+
+    Uses a stand-in for freesasa that records the input it was given and writes Examples/test.rsa.
+    """
+
+    def setUp(self):
+        self.directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, self.directory)
+        self.inputs = os.path.join(self.directory, "inputs")
+        self.scratch = os.path.join(self.directory, "scratch")
+        os.mkdir(self.inputs)
+        os.mkdir(self.scratch)
+        patch = mock.patch.object(tempfile, "tempdir", self.scratch)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.log = os.path.join(self.directory, "freesasa_args.log")
+        self.fake = os.path.join(self.directory, "fake_freesasa")
+        with open(self.fake, "w") as f:
+            f.write("#!/bin/sh\n"
+                    "for a in \"$@\"; do case $a in --output=*) out=${a#--output=};; esac; last=$a; done\n"
+                    "echo \"$last\" > '%s'\n"
+                    "cp '%s' \"$out\"\n" % (self.log, os.path.join(EXAMPLES, "test.rsa")))
+        os.chmod(self.fake, 0o755)
+
+    def run_surface(self, example):
+        path = os.path.join(self.inputs, os.path.basename(example))
+        shutil.copy(example, path)
+        SurfaceTools.check_solvent_accessibility_freesasa(path, {(21, "A", "LYS"): [0, 0, 0]}, self.fake,
+                                                          xl_list=True, hetatm=True)
+        with open(self.log) as f:
+            return f.read().strip()
+
+    def test_nowater_copy_is_not_left_beside_the_input(self):
+        given = self.run_surface(TEST_PDB)
+        self.assertEqual(os.path.basename(given), "test_nowater.pdb")
+        self.assertTrue(given.startswith(self.scratch + os.sep))
+        self.assertEqual(sorted(os.listdir(self.inputs)), ["test.pdb", "test.rsa"])
+        self.assertEqual(os.listdir(self.scratch), [])
+
+    def test_mmcif_copy_is_not_left_beside_the_input(self):
+        given = self.run_surface(TEST_CIF)
+        self.assertEqual(os.path.basename(given), "test_jwalk.cif")
+        self.assertTrue(given.startswith(self.scratch + os.sep))
+        self.assertEqual(sorted(os.listdir(self.inputs)), ["test.cif", "test.rsa"])
+        self.assertEqual(os.listdir(self.scratch), [])
+
+    def test_temp_directory_removed_when_freesasa_is_missing(self):
+        path = os.path.join(self.inputs, "test.pdb")
+        shutil.copy(TEST_PDB, path)
+        with self.assertRaises(SystemExit):
+            SurfaceTools.check_solvent_accessibility_freesasa(path, {(21, "A", "LYS"): [0, 0, 0]},
+                                                              os.path.join(self.directory, "no_such_freesasa"),
+                                                              xl_list=True, hetatm=True)
+        self.assertEqual(os.listdir(self.scratch), [])
+        self.assertEqual(os.listdir(self.inputs), ["test.pdb"])
 
 
 @unittest.skipUnless(shutil.which("freesasa"), "freesasa is not on the PATH")

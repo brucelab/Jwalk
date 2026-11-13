@@ -22,7 +22,9 @@
 
 import sys
 from math import cos, sin
+import shutil
 import subprocess
+import tempfile
 from Jwalk import PDBTools
 import os
 import re
@@ -357,34 +359,40 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
 
     mmcif = PDBTools.is_mmcif(prot)
 
-    if mmcif:
-        # freesasa reads mmCIF with --cif. It is given a copy holding exactly the atoms of Jwalk's
-        # grid (the chains with their modified residues, ligands only with -ligand, no water) and
-        # --hetatm so that it counts the HETATM rows that are left.
-        input_pdb = os.path.splitext(prot)[0] + "_jwalk.cif"
-        PDBTools.write_mmcif_for_surface(prot, input_pdb, hetatm)
-        cmd += ["--cif", "--hetatm", input_pdb]
-    elif hetatm:
-        # freesasa --hetatm would also count water, which -ligand leaves out of the grid
-        input_pdb = os.path.splitext(prot)[0] + "_nowater.pdb"
-        write_pdb_without_water(prot, input_pdb)
-        cmd += ["--hetatm", input_pdb]
-    else:
-        input_pdb = None
-        cmd.append(prot)
+    # the copies freesasa is given go in a private directory, not next to the input, so that they
+    # cannot be left behind for a later run to pick up as an input file, and so that a read-only
+    # input directory does not stop them being written. The .rsa itself stays next to the input.
+    temp_dir = tempfile.mkdtemp(prefix="jwalk_")
+    base = os.path.splitext(os.path.basename(prot))[0]
 
     try:
-        ext_freesasa = subprocess.Popen(cmd)
-        ext_freesasa.communicate()
-    except OSError:
-        print("Could not run '%s'. Please check you have Freesasa installed and on your PATH. Go to 'http://freesasa.github.io/' " % freesasa_source)
-        exit(1)
+        if mmcif:
+            # freesasa reads mmCIF with --cif. It is given a copy holding exactly the atoms of Jwalk's
+            # grid (the chains with their modified residues, ligands only with -ligand, no water) and
+            # --hetatm so that it counts the HETATM rows that are left.
+            input_pdb = os.path.join(temp_dir, base + "_jwalk.cif")
+            PDBTools.write_mmcif_for_surface(prot, input_pdb, hetatm)
+            cmd += ["--cif", "--hetatm", input_pdb]
+        elif hetatm:
+            # freesasa --hetatm would also count water, which -ligand leaves out of the grid
+            input_pdb = os.path.join(temp_dir, base + "_nowater.pdb")
+            write_pdb_without_water(prot, input_pdb)
+            cmd += ["--hetatm", input_pdb]
+        else:
+            cmd.append(prot)
+
+        try:
+            ext_freesasa = subprocess.Popen(cmd)
+            ext_freesasa.communicate()
+        except OSError:
+            print("Could not run '%s'. Please check you have Freesasa installed and on your PATH. Go to 'http://freesasa.github.io/' " % freesasa_source)
+            exit(1)
     finally:
-        if input_pdb and os.path.exists(input_pdb):
-            os.remove(input_pdb)
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
     if not os.path.exists(rsa_file):
-        print("No .rsa file created. Please check you have Freesasa installed. Go to 'http://freesasa.github.io/' ")
+        print("No .rsa file created. Please check you have Freesasa installed, and that the directory of the "
+              "input file is writable, as the .rsa is written next to it. Go to 'http://freesasa.github.io/' ")
         exit(1)
 
     # for an mmCIF file freesasa writes the chain label and residue number as one word (A022 for
