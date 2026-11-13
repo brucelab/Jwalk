@@ -1,8 +1,8 @@
 # mmCIF input
 
-Jwalk reads mmCIF files (`.cif`, `.mmcif`) directly, next to PDB files. Written 2026-10-30 on the
-`optimize` branch after reviewing two xlinkdb structures, `7ohr.cif` (51 chains) and `9syg.cif`
-(84 chains, two-character chain ids), with the aim of no longer converting mmCIF to PDB first.
+Jwalk reads mmCIF files (`.cif`, `.mmcif`) directly, next to PDB files. Written 2026-10-30 after
+reviewing two large structures, `7ohr.cif` (51 chains) and `9syg.cif` (84 chains, two-character chain
+ids), with the aim of no longer converting mmCIF to PDB first.
 
 ## Usage
 
@@ -20,9 +20,9 @@ ambiguous with chain ids longer than one character, so parse the crosslink list 
 
 ## Why
 
-xlinkdb converts mmCIF files to PDB before running Jwalk. The PDB format allows 62 one-character
-chain ids, so entries with more chains (9syg has 84) are skipped, and the conversion renames the
-chains, which has to be undone afterwards with a `_chainnames.txt` file. The review also found that
+A common workflow converts mmCIF files to PDB before running Jwalk. The PDB format allows 62
+one-character chain ids, so entries with more chains (9syg has 84) are skipped, and the conversion
+renames the chains, which has to be undone afterwards with a chain-name mapping file. The review also found that
 the conversion loses atoms: it renames every nucleotide to PHE, its phosphorus to CA, and strips
 the primes from the sugar atom names (C2', C4', C5'), which then collide with the base atoms C2, C4
 and C5 of the same residue, and Biopython's PDB parser drops the duplicates. On 7OHR the three RNA
@@ -30,7 +30,7 @@ chains lose 15% of their atoms, 9,604 heavy atoms, which leaves holes in the rRN
 search goes through.
 
 7OHR, lysine pairs, 6 CPUs, same grid origin on both routes (chains mapped back with the
-`_chainnames.txt` file):
+converter's chain-name file):
 
 | | PDB route (converted file) | mmCIF route |
 |---|---|---|
@@ -40,8 +40,7 @@ search goes through.
 | of which longer on the mmCIF route | 8,353, up to 55 A (LYS 112 - LYS 118 of chain C: 11.7 -> 66.7 A) | |
 | wall time | 34.0 s | 34.5 s |
 
-Every production Jwalk result for an RNA-containing complex made through the conversion carries
-this error.
+Any Jwalk result for an RNA-containing complex made through such a conversion carries this error.
 
 ## What is read
 
@@ -109,7 +108,7 @@ then without a trailing insertion code. The PDB layouts of FreeSASA 2.0 and 2.1 
 * `test.cif` gives the same 1,001 atoms as `test.pdb`, the same 18 ligand atoms with `-ligand`,
   and the `jwalk` output differs only in the file name in the Model column; the path file is
   identical. `test_modres.cif` reads the 8 MSE atoms without `-ligand`, with element SE.
-* On the production structures (6 CPUs): the new code on `7OHR.pdb` is byte-identical to the
+* On the two large structures (6 CPUs): the new code on `7OHR.pdb` is byte-identical to the
   previous commit; `7ohr.cif` runs in 34.5 s (42,416 SASDs); `9syg.cif` in 40.4 s (42,007 SASDs,
   74 chains with lysines, two-character ids throughout).
 * `-surface` on `test.cif` gives the same 66 SASDs and "12 are on the surface" as on `test.pdb`;
@@ -120,10 +119,10 @@ then without a trailing insertion code. The PDB layouts of FreeSASA 2.0 and 2.1 
 ## Not done
 
 * **Output naming.** Results take the file's base name as given, so `9syg.cif` gives lower-case
-  `9syg_...`; xlinkdb's result reader and its chain-name mapping step expect the renamed chains of
-  the converted PDB and would need to take the real chain ids instead.
+  `9syg_...`; code that reads the results and maps chain names back, written for converted PDB
+  files, expects the renamed chains and would need to take the real chain ids instead.
 * **Grid sized from every atom read**, as before; see the ligand-mode notes.
-* **Metal ions under `-ligand`** still get the carbon radius. On xlinkdb-written PDB files the
-  element column is absent and iron is inferred as fluorine from the name; mmCIF files carry the
+* **Metal ions under `-ligand`** still get the carbon radius. In PDB files without an
+  element column, iron is inferred as fluorine from the name; mmCIF files carry the
   element, so this does not arise with mmCIF input.
 * **`SurfaceTools.check_solvent_accessibility`** (the pure-Python check nothing calls) is untouched.

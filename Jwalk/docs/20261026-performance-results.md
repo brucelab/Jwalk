@@ -1,12 +1,12 @@
 # Jwalk performance results
 
 > **Timings on real structures are in `20261030-benchmark.md`.** The figures below were measured on a
-> 4,008-atom test structure on a loaded server; on production structures of 25k-236k atoms the finished
+> 4,008-atom test structure on a loaded machine; on real structures of 25k-236k atoms the finished
 > code is 21-23x faster than the original in wall and CPU time. This report remains the record of the
 > step-by-step history, the fixes other than the end-voxel path bug, and the design notes on the
 > hop-minimal search, ligands and the grid origin.
 
-Results of implementing the changes proposed in `20261026-performance.md`, one step at a time on the `optimize` branch. After every step the program was run on a set of test cases and its output compared with the previous step; the results below are from one final back-to-back measurement of the original code and every step.
+Results of implementing the changes proposed in `20261026-performance.md`, one step at a time. After every step the program was run on a set of test cases and its output compared with the previous step; the results below are from one final back-to-back measurement of the original code and every step.
 
 ## Summary
 
@@ -99,7 +99,7 @@ Verified by running them:
 * `PDBTools.calculate_centre_of_mass` raises `UnboundLocalError` for a structure with no atoms (the divisions are also inside the loop). Nothing in `jwalk` uses the result.
 * `GridTools.mapGridPosition` returns `0` for an atom outside the grid and `markCAlphas` then fails with `TypeError`. The grid is built around the structure, so this was only reproduced by moving the grid origin.
 
-Found by reading the code only (not run, since freesasa is not installed here, or not tested):
+Found by reading the code only (not run, since freesasa was not available in the test environment, or not tested):
 
 * The `-surface` message prints `len(aa1_CA)-1` lysines "and 1 N-terminus", but nothing in the code adds an N-terminus, so the lysine count shown is one too low.
 * `check_solvent_accessibility_freesasa`: `sd_res` is unbound if the residue list is empty. (The `test_open.close` without parentheses is gone: the function now checks for the `.rsa` with `os.path.exists`, deletes a stale one before running freesasa, and reports a missing `freesasa` executable instead of raising. Its `.rsa` parser was also rewritten for FreeSASA 2.1, whose column layout crashed the fixed-column parser; see `20261027-ligand-mode.md`.)
@@ -121,7 +121,7 @@ These measurements were taken with the first `-ligand` implementation, which cho
 
 ## Caveats
 
-* **Shared machine.** The server had a load average of about 10-12 during the final measurement, and earlier in the session the same code varied by up to 1.5x between runs (the original benchmark ranged from 34 s to 78 s wall). CPU time is steadier than wall time but not immune. Treat the ratios as indicative; the ordering of the steps is reliable, the exact factors are not.
+* **Shared machine.** The machine had a load average of about 10-12 during the final measurement, and earlier in the session the same code varied by up to 1.5x between runs (the original benchmark ranged from 34 s to 78 s wall). CPU time is steadier than wall time but not immune. Treat the ratios as indicative; the ordering of the steps is reliable, the exact factors are not.
 * **Test structures are small.** All inputs are `Examples/test.pdb` (1,002 atoms, one chain) or four translated copies of it. Larger real complexes will spend a bigger share of time in the BFS and may scale differently.
 * `-surface` (needs freesasa) and `setup.py install` were not run.
 * Small steps (7, 8, 9) are lost in the noise of whole-program timings; their individual effect was measured on the function (step 7: `generate_solvent_accessible_surface` 311 ms -> 69 ms; step 9: `read_PDB_file` 37.7 -> 29.0 ms and `write_sasd_to_pdb` 40.6 -> 31.6 ms, on the large structure).
@@ -138,4 +138,4 @@ A profile of the large benchmark with 1 CPU after step 9 puts about 65% of the r
 
 ## Reproducing
 
-The harness (test cases, runner, comparison scripts) was kept in the session scratch directory and is not part of this repository. Each step is a separate commit on `optimize`, so any step can be checked out and run against `Examples/test.pdb` with the commands in the README.
+The harness (test cases, runner, comparison scripts) was kept in the session scratch directory and is not part of this repository. Each step is a separate commit in the repository history, so any step can be checked out and run against `Examples/test.pdb` with the commands in the README.
