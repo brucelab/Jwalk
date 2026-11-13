@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 JWALK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -42,6 +43,60 @@ def read_paths(directory, pdb):
             elif line.startswith("ATOM"):
                 paths[pair] += 1
     return paths
+
+
+def euclidean_distance(directory, pdb, atom1, atom2):
+    """The Euclidean Distance column of Jwalk_results/<pdb>_crosslink_list.txt for one pair."""
+    name = os.path.splitext(os.path.basename(pdb))[0]
+    with open(os.path.join(directory, "Jwalk_results", name + "_crosslink_list.txt")) as f:
+        next(f)
+        for line in f:
+            col = line.split()
+            if {col[2], col[3]} == {atom1, atom2}:
+                return float(col[5])
+
+
+class AlternateLocations(unittest.TestCase):
+    """LYS 21 gets a second C-alpha location listed last but with the lower occupancy."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        cls.pdb = os.path.join(cls.directory, "alt.pdb")
+        with open(TEST_PDB) as f, open(cls.pdb, "w") as out:
+            for line in f:
+                if line.startswith("ATOM") and line[12:16] == " CA " and line[22:26].strip() == "21":
+                    out.write(line[:16] + "A" + line[17:54] + "  0.60" + line[60:])
+                    out.write(line[:16] + "B" + line[17:30] + "%8.3f" % (float(line[30:38]) + 2.0)
+                              + line[38:54] + "  0.40" + line[60:])
+                else:
+                    out.write(line)
+        cls.default_dir, _ = run_jwalk(cls.pdb)
+        cls.bugs_dir, _ = run_jwalk(cls.pdb, "-includebugs")
+
+    @classmethod
+    def tearDownClass(cls):
+        for d in (cls.directory, cls.default_dir, cls.bugs_dir):
+            shutil.rmtree(d)
+
+    def test_default_uses_the_selected_location(self):
+        # the same distance as with the single location of test.pdb
+        plain_dir, _ = run_jwalk(TEST_PDB)
+        self.addCleanup(shutil.rmtree, plain_dir)
+        self.assertEqual(euclidean_distance(self.default_dir, self.pdb, "LYS-21-A-CA", "LYS-26-A-CA"),
+                         euclidean_distance(plain_dir, TEST_PDB, "LYS-21-A-CA", "LYS-26-A-CA"))
+
+    def test_includebugs_uses_the_last_location(self):
+        default = euclidean_distance(self.default_dir, self.pdb, "LYS-21-A-CA", "LYS-26-A-CA")
+        bugs = euclidean_distance(self.bugs_dir, self.pdb, "LYS-21-A-CA", "LYS-26-A-CA")
+        self.assertNotEqual(default, bugs)
+        self.assertAlmostEqual(bugs, 15.922, places=2)
+
+    def test_sasd_is_the_same(self):
+        # -includebugs changes the path of the pair 125-135 (see OriginalPaths), not this one
+        pair = ("LYS-21-A-CA", "LYS-26-A-CA")
+        self.assertEqual(read_crosslink_list(self.default_dir, self.pdb)[pair],
+                         read_crosslink_list(self.bugs_dir, self.pdb)[pair])
 
 
 class OriginalPaths(unittest.TestCase):

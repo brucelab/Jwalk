@@ -94,12 +94,20 @@ The optimized code has a flag that gives the original's
 output without the original's run time: `jwalk -lys -includebugs`. It switches on the original path
 extraction (`SASDTools.original_shortest_paths`, the same emulation the `opt_bugs` variant above
 used) and the original's surface spheres chosen by the first letter of the atom name
-(`GridTools.generate_solvent_accessible_surface(..., legacy_spheres=True)`), so that with `-ligand`
+(`GridTools.generate_solvent_accessible_surface(..., legacy_spheres=True)`), and, for PDB input, the
+original's Euclidean distances (see below), so that with `-ligand`
 it also matches the original code with `hetatm=True` forced (P and metal atoms get no sphere).
 Checked on the benchmark outputs: `-includebugs` on 11YB.pdb is byte-identical to the original run,
 and `-includebugs -ligand` on 12AH.pdb is byte-identical to the original with `hetatm=True`
 (the reference ligand results). Everything else (speed, memory, mmCIF input, the crash fixes)
 stays.
+
+The Euclidean Distance column differs from the original in one case. The original re-read the C-alpha
+coordinates from the PDB file, so when a C-alpha has alternate locations the last one in the file won.
+The optimized code takes them from the structure in memory, which holds the location Biopython selects
+(the highest occupancy, the first on a tie) and is the one the SASD is computed from. The two differ only
+when the last-listed location is not the selected one; the SASDs are unaffected. `-includebugs` re-reads
+a PDB file as the original did, so it reproduces the original there too.
 
 ## 7OHR (235,845 atoms, 51 chains, 50,893 SASDs), both codes at 6 CPUs
 

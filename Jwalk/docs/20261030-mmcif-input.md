@@ -85,7 +85,12 @@ Run time 40 s and 1.1 GB per worker for each.
 `get_euclidean_distances` used to re-read the input file with fixed PDB columns. It now takes the
 C-alpha coordinates from the structure already in memory (any format), rounded to the three
 decimals of the file so that PDB output is byte-identical to before. The old file reading is kept
-for callers that pass no structure.
+for callers that pass no structure, and for `-includebugs` with PDB input.
+
+With alternate locations on a C-alpha the two sources can differ: the old file reading kept the
+last location in the file, the structure holds the one Biopython selects (the highest occupancy, the
+first on a tie), which is also the one the SASD is computed from. Only the Euclidean Distance column
+is affected.
 
 ## `-surface` with mmCIF
 

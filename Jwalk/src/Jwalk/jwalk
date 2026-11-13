@@ -84,7 +84,7 @@ parser.add_argument('-surface', action="store_true",
 parser.add_argument('-ligand', action="store_true",
 					help='treat non-water HETATM records (ligands, ions) as obstacles in the solvent accessible surface (needed for ligands and ions from both PDB and mmCIF input); modified residues (MSE, ...) need this flag from PDB input but are always included from mmCIF input')
 parser.add_argument('-includebugs', action="store_true",
-					help='reproduce the output of the original Jwalk (commit 72fac51): its path extraction, which overestimates a SASD when two residues share a surface voxel, and its surface spheres chosen by the first letter of the atom name (with -ligand, P and metals then get no sphere)')
+					help='reproduce the output of the original Jwalk (commit 72fac51): its path extraction, which overestimates a SASD when two residues share a surface voxel, and its surface spheres chosen by the first letter of the atom name (with -ligand, P and metals then get no sphere), and for PDB input its Euclidean distances from the last of any alternate locations of a C-alpha')
 parser.add_argument('-ncpus', nargs=1, type=int,
 					help='specify number of cpus to use')
 
@@ -190,7 +190,10 @@ def runJwalk(max_dist, vox, surface, xl_list, aa1, aa2, ncpus, pdb_list, ligand=
     
         # remove duplicates
         sasds = GridTools.remove_duplicates(sasds)
-        sasds = SASDTools.get_euclidean_distances(sasds, pdb, aa1, aa2, structure_instance)
+        # the original read the C-alpha coordinates back from a PDB file, where the last of several
+        # alternate locations wins; the structure in memory holds the one Biopython selects
+        euclid_structure = None if includebugs and not PDBTools.is_mmcif(pdb) else structure_instance
+        sasds = SASDTools.get_euclidean_distances(sasds, pdb, aa1, aa2, euclid_structure)
             
         # output sasds to .pdb file and .txt file
         PDBTools.write_sasd_to_txt(sasds, pdb)

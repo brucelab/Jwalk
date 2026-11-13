@@ -50,8 +50,11 @@ type "jwalk" plus any of the below flags:
   -includebugs      reproduce the output of the original Jwalk (commit 72fac51): its path
                     extraction, which overestimates a SASD when two residues share a surface
                     voxel, and its surface spheres chosen by the first letter of the atom name
-                    (so with -ligand, P and metal atoms get no sphere). For comparing with old
-                    results; see docs/20261030-benchmark.md
+                    (so with -ligand, P and metal atoms get no sphere), and, for PDB input, its
+                    Euclidean distances, taken from the last of any alternate locations of a
+                    C-alpha (otherwise the location Biopython selects, the one the SASD itself
+                    is computed from). For comparing with old results; see
+                    docs/20261030-benchmark.md
   -surface          use higher accuracy method to calculate solvent accessibility - slower
                     needs the freesasa command on your PATH (FreeSASA 2.0 or 2.1,
                     http://freesasa.github.io/); with -ligand, freesasa also sees the ligands
