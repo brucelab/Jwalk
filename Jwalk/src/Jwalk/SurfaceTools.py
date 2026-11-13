@@ -208,21 +208,30 @@ def update_crosslink_pairs(crosslink_pairs, aa1_CA, aa2_CA, remove_aa1, remove_a
                     
     return crosslink_pairs_final
     
-def rsa_words(residues):
+def rsa_words(residues, labels=None):
 
     """
 
     Returns {(residue name, chain + residue number): (res_no, chain, res)} for the residues of
     interest, the form in which a freesasa .rsa made from an mmCIF file names a residue.
 
+    The chain is the label the chain was given in the file freesasa read (PDBTools.
+    write_mmcif_for_surface); the labels all have one length, so a word names one residue. Without
+    labels the chain itself is used, and two residues can then have the same word (chain A0,
+    residue 22 and chain A02, residue 2).
+
     Arguments:
 
        *residues*
            {(res_no, chain, res) : ...}
+       *labels*
+           {chain: label} as returned by PDBTools.write_mmcif_for_surface
 
     """
 
-    return dict(((res, chain.strip() + str(num)), (num, chain, res)) for (num, chain, res) in residues)
+    labels = labels or {}
+    return dict(((res, labels.get(chain, chain.strip()) + str(num)), (num, chain, res))
+                for (num, chain, res) in residues)
 
 def parse_rsa_line(line, words=None):
 
@@ -358,6 +367,7 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
     cmd = [freesasa_source,"--format=rsa","--output=%s" % rsa_file,"--radii=naccess"]
 
     mmcif = PDBTools.is_mmcif(prot)
+    labels = {}
 
     # the copies freesasa is given go in a private directory, not next to the input, so that they
     # cannot be left behind for a later run to pick up as an input file, and so that a read-only
@@ -371,7 +381,7 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
             # grid (the chains with their modified residues, ligands only with -ligand, no water) and
             # --hetatm so that it counts the HETATM rows that are left.
             input_pdb = os.path.join(temp_dir, base + "_jwalk.cif")
-            PDBTools.write_mmcif_for_surface(prot, input_pdb, hetatm)
+            labels = PDBTools.write_mmcif_for_surface(prot, input_pdb, hetatm)
             cmd += ["--cif", "--hetatm", input_pdb]
         elif hetatm:
             # freesasa --hetatm would also count water, which -ligand leaves out of the grid
@@ -396,8 +406,9 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
         exit(1)
 
     # for an mmCIF file freesasa writes the chain label and residue number as one word (A022 for
-    # residue 22 of chain A0), so the residues of interest are looked up by that word
-    words = rsa_words(aa1_CA) if mmcif else {}
+    # residue 22 of chain A0), so the residues of interest are looked up by that word; the chains
+    # of the copy it read have labels of one length, which keeps a word from naming two residues
+    words = rsa_words(aa1_CA, labels) if mmcif else {}
 
     SA_res = {}
     with open(rsa_file) as rsa:

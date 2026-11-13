@@ -305,6 +305,84 @@ class LongChainIds(unittest.TestCase):
                          (21, "A", "LYS", 42.4))
 
 
+class ChainLabels(unittest.TestCase):
+    """freesasa runs the chain label and the residue number together, so chain A0 residue 22 and
+    chain A02 residue 2 are both A022. The chains of the copy freesasa reads get labels of one length."""
+
+    def test_labels_have_one_length_and_are_unique(self):
+        for count in (1, 3, 62, 63, 3844, 3845):
+            labels = PDBTools.surface_chain_labels(["c%d" % k for k in range(count)])
+            self.assertEqual(len(labels), count)
+            self.assertEqual(len(set(labels.values())), count)
+            self.assertEqual(len(set(len(v) for v in labels.values())), 1)
+            self.assertGreaterEqual(len(next(iter(labels.values()))), 2)
+        self.assertEqual(len(PDBTools.surface_chain_labels(["a"] * 5 + ["b"])), 2)
+
+    def test_same_word_for_two_residues_without_labels(self):
+        residues = {(22, "A0", "LYS"): None, (2, "A02", "LYS"): None}
+        self.assertEqual(len(SurfaceTools.rsa_words(residues)), 1)
+        labels = PDBTools.surface_chain_labels(["A0", "A02"])
+        words = SurfaceTools.rsa_words(residues, labels)
+        self.assertEqual(len(words), 2)
+        self.assertEqual(words[("LYS", labels["A0"] + "22")], (22, "A0", "LYS"))
+        self.assertEqual(words[("LYS", labels["A02"] + "2")], (2, "A02", "LYS"))
+
+    def test_copy_is_relabelled(self):
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        out = os.path.join(directory, "surface.cif")
+        labels = PDBTools.write_mmcif_for_surface(TEST_CIF, out, ligands=True)
+        self.assertEqual(list(labels), ["A"])
+        with open(out) as f:
+            chains = set(l.split()[18] for l in f if l.startswith(("ATOM", "HETATM")))
+        self.assertEqual(chains, {labels["A"]})
+        self.assertNotEqual(labels["A"], "A")
+        # the atoms are the same as in the file
+        self.assertEqual(len(PDBTools.read_PDB_file(out, hetatm=True).atomList), 1001 + 18)
+
+
+@unittest.skipUnless(shutil.which("freesasa"), "freesasa is not on the PATH")
+class ChainWordCollision(unittest.TestCase):
+    """LEU 23 of chain A0 (buried) and LEU 98 of chain A02, renumbered 3 (exposed), are both A023."""
+
+    LEU = {"buried": (23, "A0", "LEU"), "exposed": (3, "A02", "LEU")}
+
+    def make_cif(self, directory, name, second_chain):
+        with open(TEST_CIF) as f:
+            lines = f.read().split("\n")
+        columns = [l.split()[0][len("_atom_site."):] for l in lines if l.startswith("_atom_site.")]
+        chain, number = columns.index("auth_asym_id"), columns.index("auth_seq_id")
+        out = []
+        for line in lines:
+            tokens = line.split()
+            if len(tokens) == len(columns) and tokens[0] in ("ATOM", "HETATM"):
+                if tokens[number] == "98":
+                    tokens[chain], tokens[number] = second_chain, "3"
+                else:
+                    tokens[chain] = "A0"
+                line = " ".join(tokens)
+            out.append(line)
+        path = os.path.join(directory, name)
+        with open(path, "w") as f:
+            f.write("\n".join(out))
+        return path
+
+    def exposed(self, path, residues):
+        return SurfaceTools.check_solvent_accessibility_freesasa(
+            path, dict((r, [0, 0, 0]) for r in residues), "freesasa", xl_list=True, hetatm=False)
+
+    def test_each_residue_gets_its_own_exposure(self):
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        # the same structure with no clash, as the reference
+        reference = self.make_cif(directory, "reference.cif", "B")
+        truth = self.exposed(reference, [(23, "A0", "LEU"), (3, "B", "LEU")])
+        self.assertEqual(list(truth), [(3, "B", "LEU")])
+        collision = self.make_cif(directory, "collision.cif", "A02")
+        for residues in ([self.LEU["buried"], self.LEU["exposed"]], [self.LEU["exposed"], self.LEU["buried"]]):
+            self.assertEqual(list(self.exposed(collision, residues)), [self.LEU["exposed"]])
+
+
 class SurfaceTempFiles(unittest.TestCase):
     """The copies freesasa is given are written to a private directory, not next to the input.
 

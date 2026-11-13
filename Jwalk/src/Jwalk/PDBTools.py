@@ -25,6 +25,7 @@ from Bio.PDB import PDBParser as PDBParserBiopy
 from Bio.PDB import MMCIFParser as MMCIFParserBiopy
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 import os
+import string
 
 class Vector:
     """A class representing Cartesian 3-dimensonal vectors."""
@@ -607,7 +608,7 @@ def read_PDB_file(filename,hetatm=False,water=False):
 
         return BioPy_Structure(atomList, filename, header, footer)
 
-def write_mmcif_subset(filename, outname, keep):
+def write_mmcif_subset(filename, outname, keep, chain_labels=None):
 
     """
 
@@ -625,6 +626,9 @@ def write_mmcif_subset(filename, outname, keep):
            HETATM, chain and number are the author chain and residue number (number as an int, or
            None if it isn't one), icode the insertion code or a space and residue_name the author
            residue name
+       *chain_labels*
+           {author chain: label}: the author chain of every row that is kept is replaced by its
+           label (a row that is kept is written with single spaces between its values then)
 
     """
 
@@ -660,12 +664,47 @@ def write_mmcif_subset(filename, outname, keep):
                             _blank(tokens[index["pdbx_PDB_ins_code"]]), tokens[index["auth_comp_id"]]):
                     i += 1
                     continue
+                if chain_labels:
+                    chain = tokens[index["auth_asym_id"]]
+                    tokens[index["auth_asym_id"]] = chain_labels.get(chain, chain)
+                    line = " ".join(tokens) + "\n"
             out.append(line)
             i += 1
     out.extend(lines[i:])
 
     with open(outname, "w") as outf:
         outf.writelines(out)
+
+def surface_chain_labels(chains):
+
+    """
+
+    Returns {chain: label} giving every chain a label of the same length (at least two characters,
+    from 0-9, A-Z and a-z). freesasa writes the chain label and the residue number of a residue
+    as one word in the .rsa file of an mmCIF input (chain A0, residue 22 is A022), which names
+    exactly one residue only if the labels are all of one length: A0 22 and A02 2 are both A022.
+
+    Arguments:
+
+       *chains*
+           the author chains of the file
+
+    """
+
+    alphabet = string.digits + string.ascii_uppercase + string.ascii_lowercase
+    unique = list(dict.fromkeys(chains))
+    width = 2
+    while len(alphabet) ** width < len(unique):
+        width += 1
+
+    labels = {}
+    for k, chain in enumerate(unique):
+        label = ""
+        for _ in range(width):
+            label = alphabet[k % len(alphabet)] + label
+            k //= len(alphabet)
+        labels[chain] = label
+    return labels
 
 def write_mmcif_for_surface(filename, outname, ligands):
 
@@ -675,6 +714,10 @@ def write_mmcif_for_surface(filename, outname, ligands):
     puts in its grid. The polymer chains with their modified residues are always kept, ligands and
     ions only if ligands is true (-ligand), water never. Hydrogens are left to freesasa, which
     ignores them unless asked.
+
+    The chains are renamed to labels of one length (surface_chain_labels), so that the word
+    freesasa makes of a chain label and a residue number names one residue; the labels are
+    returned as {author chain: label}.
 
     Arguments:
 
@@ -687,7 +730,12 @@ def write_mmcif_for_surface(filename, outname, ligands):
 
     """
 
-    polymer = polymer_residues(MMCIF2Dict(filename))
+    mmcif_dict = MMCIF2Dict(filename)
+    polymer = polymer_residues(mmcif_dict)
+    chains = mmcif_dict.get("_atom_site.auth_asym_id", [])
+    if isinstance(chains, str):
+        chains = [chains]
+    labels = surface_chain_labels(chains)
 
     def keep(group, chain, number, icode, residue_name):
         if group != "HETATM":
@@ -696,7 +744,8 @@ def write_mmcif_for_surface(filename, outname, ligands):
             return True
         return ligands and residue_name not in WATER_NAMES
 
-    write_mmcif_subset(filename, outname, keep)
+    write_mmcif_subset(filename, outname, keep, labels)
+    return labels
         
 def write_sasd_to_txt(sasds,pdb):
 	

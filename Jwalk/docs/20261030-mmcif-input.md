@@ -103,9 +103,15 @@ ligands only with `-ligand`, no water, and runs it with `--hetatm` so that the `
 are left are counted. For PDB input nothing changed.
 
 In a `.rsa` file made from mmCIF, freesasa writes the chain label and residue number as one word
-(`A022` is residue 22 of chain `A0`), which cannot be split without knowing the chains. The residues
-of interest are therefore looked up by that word (`SurfaceTools.rsa_words`), first as written and
-then without a trailing insertion code. The PDB layouts of FreeSASA 2.0 and 2.1 parse as before.
+(`A022` is residue 22 of chain `A0`), which cannot be split without knowing the chains, and which is
+not unique: chain `A02` residue 2 is `A022` too, and so are chain `1` residue 11 and chain `11`
+residue 1. Left like that, one of two residues with the same word would be matched to the other's
+line and the second never matched, so a buried residue could be reported exposed and an exposed one
+buried. Jwalk therefore renames the chains in the copy freesasa reads to labels of one length, at
+least two characters from 0-9, A-Z and a-z (`PDBTools.surface_chain_labels`), so that a word names
+exactly one residue, and maps them back. The residues of interest are looked up by that word
+(`SurfaceTools.rsa_words`), first as written and then without a trailing insertion code. The PDB
+layouts of FreeSASA 2.0 and 2.1 parse as before.
 
 ## Validation
 
