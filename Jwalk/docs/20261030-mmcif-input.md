@@ -109,7 +109,9 @@ residue 1. Left like that, one of two residues with the same word would be match
 line and the second never matched, so a buried residue could be reported exposed and an exposed one
 buried. Jwalk therefore renames the chains in the copy freesasa reads to labels of one length, at
 least two characters from 0-9, A-Z and a-z (`PDBTools.surface_chain_labels`), so that a word names
-exactly one residue, and maps them back. The residues of interest are looked up by that word
+exactly one residue, and maps them back. (If a copy cannot be renamed, because a column is missing or a
+row does not split into one value per column, it keeps the author chains and the lookup uses them.)
+The residues of interest are looked up by that word
 (`SurfaceTools.rsa_words`), first as written and then without a trailing insertion code. The PDB
 layouts of FreeSASA 2.0 and 2.1 parse as before.
 

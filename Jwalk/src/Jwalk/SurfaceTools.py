@@ -253,7 +253,8 @@ def parse_rsa_line(line, words=None):
 
     With mmCIF input freesasa runs the chain label and the residue number together (A022 is
     residue 22 of chain A0). Such a line is matched against words, the output of rsa_words for
-    the residues of interest, first as written and then without a trailing insertion code.
+    the residues of interest, first as written and then without a trailing insertion code; if it
+    is not there, the line is not a residue of interest and None is returned.
 
     Arguments:
 
@@ -272,12 +273,14 @@ def parse_rsa_line(line, words=None):
     if words and len(col) == 13:
         word = col[2]
         key = (col[1], word) if (col[1], word) in words else (col[1], word.rstrip(string.ascii_letters))
-        if key in words:
-            num, chain, name = words[key]
-            try:
-                return num, chain, name, float(col[4])
-            except ValueError:
-                return None
+        if key not in words:
+            # not a residue of interest; the word is not a residue number, so it is not read as one
+            return None
+        num, chain, name = words[key]
+        try:
+            return num, chain, name, float(col[4])
+        except ValueError:
+            return None
 
     if len(col) == 14:
         name, chain, num, rel = col[1], col[2], col[3], col[5]
@@ -376,10 +379,13 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
     # the copies freesasa is given go in a private directory, not next to the input, so that they
     # cannot be left behind for a later run to pick up as an input file, and so that a read-only
     # input directory does not stop them being written. The .rsa itself stays next to the input.
-    temp_dir = tempfile.mkdtemp(prefix="jwalk_")
+    temp_dir = None
     base = os.path.splitext(os.path.basename(prot))[0]
 
     try:
+        if mmcif or hetatm:
+            temp_dir = tempfile.mkdtemp(prefix="jwalk_")
+
         if mmcif:
             # freesasa reads mmCIF with --cif. It is given a copy holding exactly the atoms of Jwalk's
             # grid (the chains with their modified residues, ligands only with -ligand, no water) and
@@ -402,7 +408,8 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
             print("Could not run '%s'. Please check you have Freesasa installed and on your PATH. Go to 'http://freesasa.github.io/' " % freesasa_source)
             exit(1)
     finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     if not os.path.exists(rsa_file):
         print("No .rsa file created. Please check you have Freesasa installed, and that the directory of the "

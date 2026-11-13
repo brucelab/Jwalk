@@ -305,6 +305,29 @@ class LongChainIds(unittest.TestCase):
                          (21, "A", "LYS", 42.4))
 
 
+def chain_a0_cif(directory, name, drop_ins_code=False):
+    """Examples/test.cif with every chain renamed A0, and optionally without the pdbx_PDB_ins_code column."""
+    with open(TEST_CIF) as f:
+        lines = f.read().split("\n")
+    columns = [l.split()[0][len("_atom_site."):] for l in lines if l.startswith("_atom_site.")]
+    chain, ins_code = columns.index("auth_asym_id"), columns.index("pdbx_PDB_ins_code")
+    out = []
+    for line in lines:
+        if drop_ins_code and line.startswith("_atom_site.pdbx_PDB_ins_code"):
+            continue
+        tokens = line.split()
+        if len(tokens) == len(columns) and tokens[0] in ("ATOM", "HETATM"):
+            tokens[chain] = "A0"
+            if drop_ins_code:
+                del tokens[ins_code]
+            line = " ".join(tokens)
+        out.append(line)
+    path = os.path.join(directory, name)
+    with open(path, "w") as f:
+        f.write("\n".join(out))
+    return path
+
+
 class ChainLabels(unittest.TestCase):
     """freesasa runs the chain label and the residue number together, so chain A0 residue 22 and
     chain A02 residue 2 are both A022. The chains of the copy freesasa reads get labels of one length."""
@@ -333,6 +356,42 @@ class ChainLabels(unittest.TestCase):
         labels = PDBTools.surface_chain_labels(["A", "A1"])
         words = SurfaceTools.rsa_words(residues, labels)
         self.assertEqual(sorted(words.values()), [(2, "A1", "LYS"), (12, "A", "LYS")])
+
+    def test_copy_without_a_needed_column_keeps_its_chains_and_returns_no_labels(self):
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        source = chain_a0_cif(directory, "no_ins_code.cif", drop_ins_code=True)
+        out = os.path.join(directory, "surface.cif")
+        self.assertEqual(PDBTools.write_mmcif_for_surface(source, out, ligands=False), {})
+        with open(out) as f:
+            chains = set(l.split()[17] for l in f if l.startswith(("ATOM", "HETATM")))
+        self.assertEqual(chains, {"A0"})
+
+    def test_quoted_value_with_a_space_does_not_stop_the_relabelling(self):
+        self.assertEqual(PDBTools.cif_values("ATOM 1 \"C A\" O5' 'x y' \"O5'\" z"),
+                         ["ATOM", "1", '"C A"', "O5'", "'x y'", '"O5\'"', "z"])
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        source = os.path.join(directory, "quoted.cif")
+        with open(TEST_CIF) as f:
+            text = f.read()
+        with open(source, "w") as f:
+            f.write(text.replace(" CA ", ' "C A" ', 1))
+        out = os.path.join(directory, "surface.cif")
+        labels = PDBTools.write_mmcif_for_surface(source, out, ligands=False)
+        self.assertEqual(labels, {"A": "00"})
+        with open(out) as f:
+            rows = [PDBTools.cif_values(l) for l in f if l.startswith(("ATOM", "HETATM"))]
+        self.assertIn('"C A"', [r[3] for r in rows])
+        self.assertEqual(set(r[18] for r in rows), {"00"})
+
+    def test_line_not_of_interest_is_not_read_as_a_residue(self):
+        words = SurfaceTools.rsa_words({(21, "A", "LYS"): None}, {"A": "00"})
+        self.assertEqual(SurfaceTools.parse_rsa_line(
+            "RES LYS  0021     61.98  31.0  61.46  38.8   0.52   1.2  30.23  26.1  31.75  37.7", words),
+            (21, "A", "LYS", 31.0))
+        self.assertIsNone(SurfaceTools.parse_rsa_line(
+            "RES PRO  0020    107.63  79.2  98.04  90.1   9.58  35.4  98.04  81.3   9.58  63.2", words))
 
     def test_copy_is_relabelled(self):
         directory = tempfile.mkdtemp(prefix="jwalk_test_")
@@ -390,6 +449,7 @@ class ChainWordCollision(unittest.TestCase):
             self.assertEqual(list(self.exposed(collision, residues)), [self.LEU["exposed"]])
 
 
+
 class SurfaceTempFiles(unittest.TestCase):
     """The copies freesasa is given are written to a private directory, not next to the input.
 
@@ -407,12 +467,14 @@ class SurfaceTempFiles(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         self.log = os.path.join(self.directory, "freesasa_args.log")
+        self.rsa_source = os.path.join(self.directory, "fake.rsa")
+        shutil.copy(os.path.join(EXAMPLES, "test.rsa"), self.rsa_source)
         self.fake = os.path.join(self.directory, "fake_freesasa")
         with open(self.fake, "w") as f:
             f.write("#!/bin/sh\n"
                     "for a in \"$@\"; do case $a in --output=*) out=${a#--output=};; esac; last=$a; done\n"
                     "echo \"$last\" > '%s'\n"
-                    "cp '%s' \"$out\"\n" % (self.log, os.path.join(EXAMPLES, "test.rsa")))
+                    "cp '%s' \"$out\"\n" % (self.log, self.rsa_source))
         os.chmod(self.fake, 0o755)
 
     def run_surface(self, example):
@@ -436,6 +498,25 @@ class SurfaceTempFiles(unittest.TestCase):
         self.assertTrue(given.startswith(self.scratch + os.sep))
         self.assertEqual(sorted(os.listdir(self.inputs)), ["test.cif", "test.rsa"])
         self.assertEqual(os.listdir(self.scratch), [])
+
+    def test_copy_that_could_not_be_relabelled_is_read_with_its_own_chains(self):
+        # no pdbx_PDB_ins_code column, so the copy keeps chain A0 and the .rsa words are A023 and A098
+        with open(self.rsa_source, "w") as f:
+            f.write("RES LEU  A023      0.28   0.2   0.28   0.2   0.00   0.0   0.28   0.2   0.00   0.0\n"
+                    "RES LEU  A098    107.63  46.9  98.04  90.1   9.58  35.4  98.04  81.3   9.58  63.2\n")
+        path = chain_a0_cif(self.inputs, "no_ins_code.cif", drop_ins_code=True)
+        exposed = SurfaceTools.check_solvent_accessibility_freesasa(
+            path, {(23, "A0", "LEU"): [0, 0, 0], (98, "A0", "LEU"): [0, 0, 0]}, self.fake, xl_list=True,
+            hetatm=False)
+        self.assertEqual(list(exposed), [(98, "A0", "LEU")])
+
+    def test_no_temp_directory_for_a_plain_pdb(self):
+        path = os.path.join(self.inputs, "test.pdb")
+        shutil.copy(TEST_PDB, path)
+        with mock.patch.object(tempfile, "mkdtemp", side_effect=AssertionError("no temp directory needed")):
+            SurfaceTools.check_solvent_accessibility_freesasa(path, {(21, "A", "LYS"): [0, 0, 0]}, self.fake,
+                                                              xl_list=True, hetatm=False)
+        self.assertEqual(sorted(os.listdir(self.inputs)), ["test.pdb", "test.rsa"])
 
     def test_temp_directory_removed_when_freesasa_is_missing(self):
         path = os.path.join(self.inputs, "test.pdb")

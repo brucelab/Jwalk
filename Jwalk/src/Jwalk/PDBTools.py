@@ -25,6 +25,7 @@ from Bio.PDB import PDBParser as PDBParserBiopy
 from Bio.PDB import MMCIFParser as MMCIFParserBiopy
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 import os
+import re
 import string
 
 class Vector:
@@ -608,12 +609,25 @@ def read_PDB_file(filename,hetatm=False,water=False):
 
         return BioPy_Structure(atomList, filename, header, footer)
 
+# a value of an mmCIF row: a word, or text in single or double quotes, where a quote ends the text
+# only when white space follows it (O5' and "O5'" are both one value)
+_CIF_VALUE = re.compile(r"""'(?:[^']|'(?=\S))*'(?=\s|$)|"(?:[^"]|"(?=\S))*"(?=\s|$)|\S+""")
+
+def cif_values(line):
+    """The values of one row of an mmCIF loop, quotes kept."""
+    return _CIF_VALUE.findall(line)
+
 def write_mmcif_subset(filename, outname, keep, chain_labels=None):
 
     """
 
     Copies an mmCIF file keeping only the rows of the _atom_site loop for which keep(...) is true.
     Every other line is copied unchanged.
+
+    Returns chain_labels if the chains of the rows that are kept were renamed, and {} if not: the
+    chains are renamed only if the loop has the columns needed to find them and every row splits into
+    one value per column (a row that is a text field of several lines does not), so that the copy
+    is never part renamed.
 
     Arguments:
 
@@ -637,6 +651,7 @@ def write_mmcif_subset(filename, outname, keep, chain_labels=None):
 
     out = []
     columns = []
+    applied = {}
     i = 0
     n = len(lines)
     while i < n and not lines[i].startswith("_atom_site."):
@@ -650,11 +665,15 @@ def write_mmcif_subset(filename, outname, keep, chain_labels=None):
     index = dict((c, k) for k, c in enumerate(columns))
     needed = ("group_PDB", "auth_asym_id", "auth_seq_id", "pdbx_PDB_ins_code", "auth_comp_id")
     if columns and all(c in index for c in needed):
-        while i < n:
-            line = lines[i]
+        end = i
+        while end < n:
+            line = lines[end]
             if line.startswith("#") or line.startswith("_") or line.startswith("loop_") or not line.strip():
                 break
-            tokens = line.split()
+            end += 1
+        rows = [(line, cif_values(line)) for line in lines[i:end]]
+        relabel = bool(chain_labels) and all(len(tokens) == len(columns) for line, tokens in rows)
+        for line, tokens in rows:
             if len(tokens) == len(columns):
                 try:
                     number = int(tokens[index["auth_seq_id"]])
@@ -662,18 +681,21 @@ def write_mmcif_subset(filename, outname, keep, chain_labels=None):
                     number = None
                 if not keep(tokens[index["group_PDB"]], tokens[index["auth_asym_id"]], number,
                             _blank(tokens[index["pdbx_PDB_ins_code"]]), tokens[index["auth_comp_id"]]):
-                    i += 1
                     continue
-                if chain_labels:
+                if relabel:
                     chain = tokens[index["auth_asym_id"]]
                     tokens[index["auth_asym_id"]] = chain_labels.get(chain, chain)
                     line = " ".join(tokens) + "\n"
             out.append(line)
-            i += 1
+        i = end
+        if relabel:
+            applied = chain_labels
     out.extend(lines[i:])
 
     with open(outname, "w") as outf:
         outf.writelines(out)
+
+    return applied
 
 def surface_chain_labels(chains):
 
@@ -717,7 +739,8 @@ def write_mmcif_for_surface(filename, outname, ligands):
 
     The chains are renamed to labels of one length (surface_chain_labels), so that the word
     freesasa makes of a chain label and a residue number names one residue; the labels are
-    returned as {author chain: label}.
+    returned as {author chain: label}. If the copy could not be renamed (see write_mmcif_subset)
+    it keeps the author chains and {} is returned.
 
     Arguments:
 
@@ -744,8 +767,7 @@ def write_mmcif_for_surface(filename, outname, ligands):
             return True
         return ligands and residue_name not in WATER_NAMES
 
-    write_mmcif_subset(filename, outname, keep, labels)
-    return labels
+    return write_mmcif_subset(filename, outname, keep, labels)
         
 def write_sasd_to_txt(sasds,pdb):
 	
