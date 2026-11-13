@@ -55,7 +55,8 @@ the parsed dictionary is reused for the polymer lookup below.
   OMC, OMU, 5MC, ... The file says which residues belong to a chain (`_pdbx_poly_seq_scheme`,
   matched on author chain, residue number and insertion code), so these are told from ligands.
   They are obstacles like any other residue. They are not crosslink sites: a modified lysine
-  written as MLY or LLP is not a LYS, exactly as before.
+  written as MLY or LLP is not a LYS, exactly as before. A crosslink list (`-xl_list`) can name
+  one, since it matches on residue number and chain only.
 * **Ligands and ions only with `-ligand`**, as for PDB files. Water never.
 * **Hydrogens** are dropped by element (H, D). PDB files are still judged by the first letter of the
   atom name, as before, so their output is unchanged byte for byte.

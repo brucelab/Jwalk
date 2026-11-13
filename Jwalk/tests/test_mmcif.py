@@ -174,6 +174,26 @@ class Euclidean(unittest.TestCase):
         sasds = {((21, "A", "LYS"), (999, "A", "LYS"), 10.0): []}
         self.assertEqual(SASDTools.get_euclidean_distances(sasds, TEST_PDB, "LYS", "LYS", structure), {})
 
+    def test_modified_residue_is_a_site(self):
+        structure = PDBTools.read_PDB_file(MODRES_CIF)
+        sasds = {((142, "A", "MSE"), (46, "A", "LYS"), 10.0): []}
+        result = SASDTools.get_euclidean_distances(sasds, MODRES_CIF, "MSE", "LYS", structure)
+        self.assertEqual(len(result), 1)
+
+    def test_hetero_ion_named_ca_is_not_used(self):
+        class Atom:
+            def __init__(self, record_name, res_no, res, x, y):
+                self.record_name, self.atom_name, self.chain = record_name, "CA", "A"
+                self.res_no, self.res, self.x, self.y, self.z = res_no, res, x, y, 0.0
+
+        class Structure:
+            atomList = [Atom("ATOM", 10, "LYS", 0.0, 0.0), Atom("ATOM", 20, "LYS", 3.0, 4.0),
+                        Atom("HETATM", 10, "CA", 50.0, 0.0)]
+
+        sasds = {((10, "A", "LYS"), (20, "A", "LYS"), 10.0): []}
+        result = SASDTools.get_euclidean_distances(sasds, None, "LYS", "LYS", Structure())
+        self.assertEqual([k[3] for k in result], [5.0])
+
 
 class CommandLine(unittest.TestCase):
 
@@ -194,6 +214,20 @@ class CommandLine(unittest.TestCase):
         self.addCleanup(shutil.rmtree, directory)
         self.assertIn("66 SASDs calculated", stdout)
         self.assertEqual(len(read_crosslink_list(directory, MODRES_CIF)), 66)
+
+    def test_crosslink_list_on_modified_residue(self):
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        with open(os.path.join(directory, "xl.txt"), "w") as f:
+            f.write("142|A|46|A|\n")
+        shutil.copy(MODRES_CIF, directory)
+        env = dict(os.environ, PYTHONPATH=SRC_DIR)
+        result = subprocess.run([sys.executable, JWALK_SCRIPT, "-i", "test_modres.cif", "-xl_list", "xl.txt",
+                                 "-ncpus", "1"], cwd=directory, env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 SASDs calculated", result.stdout)
+        with open(os.path.join(directory, "Jwalk_results", "test_modres_crosslink_list.txt")) as f:
+            self.assertIn("MSE-142-A-CA", f.read())
 
     def test_default_file_list_includes_cif(self):
         directory = tempfile.mkdtemp(prefix="jwalk_test_")

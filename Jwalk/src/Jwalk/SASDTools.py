@@ -720,8 +720,14 @@ def get_euclidean_distances(sasds, pdb, aa1, aa2, structure=None):
 
     coords = {}
     if structure is not None:
+        # a HETATM C-alpha is used only for a residue that is an end of a sasd (a modified residue of
+        # a chain, such as MSE), so that a calcium ion named CA cannot replace a residue's coordinates
+        ends = set()
+        for s in sasds:
+            ends.add(s[0])
+            ends.add(s[1])
         for atom in structure.atomList:
-            if atom.record_name == 'ATOM' and atom.atom_name == 'CA':
+            if atom.atom_name == 'CA' and (atom.record_name == 'ATOM' or (atom.res_no, atom.chain, atom.res) in ends):
                 coords[atom.res_no, atom.chain] = [round(atom.x, 3), round(atom.y, 3), round(atom.z, 3)]
     else:
         residues = {}
