@@ -218,7 +218,8 @@ def rsa_words(residues, labels=None):
     The chain is the label the chain was given in the file freesasa read (PDBTools.
     write_mmcif_for_surface); the labels all have one length, so a word names one residue. Without
     labels the chain itself is used, which is only unambiguous if no two residues have the same
-    word (chain A0, residue 22 and chain A02, residue 2 do), and a ValueError is raised if two do.
+    word (chain A0, residue 22 and chain A02, residue 2 do). A ValueError naming the residues is
+    raised if two of them do.
 
     Arguments:
 
@@ -230,11 +231,22 @@ def rsa_words(residues, labels=None):
     """
 
     labels = labels or {}
-    words = dict(((res, labels.get(chain, chain.strip()) + str(num)), (num, chain, res))
-                 for (num, chain, res) in residues)
-    if len(words) != len(set(residues)):
-        raise ValueError("two residues of interest have the same chain and number word in the .rsa file; "
-                         "give rsa_words the chain labels of PDBTools.write_mmcif_for_surface")
+    words = {}
+    clashes = {}
+    for (num, chain, res) in residues:
+        key = (res, labels.get(chain, chain.strip()) + str(num))
+        if key in words:
+            clashes.setdefault(key, [words[key]]).append((num, chain, res))
+        else:
+            words[key] = (num, chain, res)
+
+    if clashes:
+        described = []
+        for key, clashing in clashes.items():
+            described.append("%s (%s)" % (" and ".join("%s %d of chain %s" % (res, num, chain)
+                                                       for (num, chain, res) in clashing), key[1]))
+        raise ValueError("freesasa names these residues by the same word, so their accessibility cannot "
+                         "be told apart: " + "; ".join(described))
     return words
 
 def parse_rsa_line(line, words=None):
@@ -375,6 +387,7 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
 
     mmcif = PDBTools.is_mmcif(prot)
     labels = {}
+    words = {}
 
     # the copies freesasa is given go in a private directory, not next to the input, so that they
     # cannot be left behind for a later run to pick up as an input file, and so that a read-only
@@ -393,6 +406,17 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
             input_pdb = os.path.join(temp_dir, base + "_jwalk.cif")
             labels = PDBTools.write_mmcif_for_surface(prot, input_pdb, hetatm)
             cmd += ["--cif", "--hetatm", input_pdb]
+            # for an mmCIF file freesasa writes the chain label and residue number as one word (A022
+            # for residue 22 of chain A0), so the residues of interest are looked up by that word; the
+            # chains of the copy it reads have labels of one length, which keeps a word from naming
+            # two residues. Checked before freesasa runs, so that nothing is left behind if it can't be.
+            try:
+                words = rsa_words(aa1_CA, labels)
+            except ValueError as error:
+                print("Cannot use -surface on %s: %s. Rename the chains of the file so that a chain "
+                      "followed by a residue number cannot read as another chain with a different "
+                      "number." % (os.path.basename(prot), error))
+                exit(1)
         elif hetatm:
             # freesasa --hetatm would also count water, which -ligand leaves out of the grid
             input_pdb = os.path.join(temp_dir, base + "_nowater.pdb")
@@ -415,11 +439,6 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
         print("No .rsa file created. Please check you have Freesasa installed, and that the directory of the "
               "input file is writable, as the .rsa is written next to it. Go to 'http://freesasa.github.io/' ")
         exit(1)
-
-    # for an mmCIF file freesasa writes the chain label and residue number as one word (A022 for
-    # residue 22 of chain A0), so the residues of interest are looked up by that word; the chains
-    # of the copy it read have labels of one length, which keeps a word from naming two residues
-    words = rsa_words(aa1_CA, labels) if mmcif else {}
 
     SA_res = {}
     with open(rsa_file) as rsa:

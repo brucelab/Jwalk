@@ -17,6 +17,8 @@
 #     The -surface tests are skipped when freesasa is not on the PATH.
 #===============================================================================
 
+import contextlib
+import io
 import os
 import shutil
 import subprocess
@@ -343,8 +345,10 @@ class ChainLabels(unittest.TestCase):
 
     def test_same_word_for_two_residues_without_labels(self):
         residues = {(22, "A0", "LYS"): None, (2, "A02", "LYS"): None}
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as caught:
             SurfaceTools.rsa_words(residues)
+        for part in ("LYS 22 of chain A0", "LYS 2 of chain A02", "A022"):
+            self.assertIn(part, str(caught.exception))
         labels = PDBTools.surface_chain_labels(["A0", "A02"])
         words = SurfaceTools.rsa_words(residues, labels)
         self.assertEqual(len(words), 2)
@@ -509,6 +513,21 @@ class SurfaceTempFiles(unittest.TestCase):
             path, {(23, "A0", "LEU"): [0, 0, 0], (98, "A0", "LEU"): [0, 0, 0]}, self.fake, xl_list=True,
             hetatm=False)
         self.assertEqual(list(exposed), [(98, "A0", "LEU")])
+
+    def test_clashing_residues_stop_the_run_before_freesasa_with_a_message(self):
+        # no pdbx_PDB_ins_code column, so the copy keeps its chains and A0 22 and A02 2 are both A022
+        path = chain_a0_cif(self.inputs, "no_ins_code.cif", drop_ins_code=True)
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed), self.assertRaises(SystemExit) as stopped:
+            SurfaceTools.check_solvent_accessibility_freesasa(
+                path, {(22, "A0", "LYS"): [0, 0, 0], (2, "A02", "LYS"): [0, 0, 0]}, self.fake, xl_list=True,
+                hetatm=False)
+        self.assertEqual(stopped.exception.code, 1)
+        for part in ("-surface", "no_ins_code.cif", "LYS 22 of chain A0", "LYS 2 of chain A02", "A022"):
+            self.assertIn(part, printed.getvalue())
+        self.assertFalse(os.path.exists(self.log))
+        self.assertEqual(os.listdir(self.inputs), ["no_ins_code.cif"])
+        self.assertEqual(os.listdir(self.scratch), [])
 
     def test_no_temp_directory_for_a_plain_pdb(self):
         path = os.path.join(self.inputs, "test.pdb")
