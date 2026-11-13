@@ -131,6 +131,43 @@ like-for-like figure. Note also that the original took the same ~23 min with 6 C
 with the default 24, so the original does not scale beyond a handful of workers on a structure this
 size (each task re-pickles the whole grid, and the workers need ~25 GB each at peak).
 
+## Re-run on the final branch (added 2026-11-13)
+
+The benchmark was repeated on the branch head, commit `8a4e547` (variant `opt_head`), after the later
+changes: modified residues as crosslink sites, the Euclidean distances taken from the structure in
+memory, the check for inputs that share a base name, and the `-surface` and mmCIF fixes. Same
+interpreter and harness, on an idle machine. The five structures ran twice at 16 CPUs (best shown), and
+7OHR.pdb, 7ohr.cif and 9syg.cif once at 6 CPUs. `opt_fixed` below is the best of its two runs from the
+first benchmark.
+
+| File | opt_fixed wall | opt_head wall | opt_fixed CPU | opt_head CPU | opt_head peak memory |
+|---|---|---|---|---|---|
+| 11YB | 2.9 s | 2.9 s | 34 s | 33 s | 0.15 GB |
+| 11AA | 8.1 s | 8.0 s | 92 s | 92 s | 0.25 GB |
+| 12AH | 16.3 s | 16.1 s | 181 s | 179 s | 0.49 GB |
+| 11HV | 34.9 s | 34.5 s | 401 s | 398 s | 0.84 GB |
+| 11HE | 34.1 s | 34.0 s | 393 s | 393 s | 0.84 GB |
+| Total | 96.2 s | 95.4 s | 1,102 s | 1,096 s | |
+
+Against the original's 2,049 s wall and 25,305 s CPU that is 21.5x and 23.1x. The differences from
+`opt_fixed` are 1-3% and within the run-to-run variation (repeats agreed within 1 s).
+
+At 6 CPUs:
+
+| Run | Wall | CPU (all workers) | Largest process RSS | Earlier |
+|---|---|---|---|---|
+| 7OHR.pdb | 33.5 s | 140 s | 1.03 GB | 36.4 s (`opt_fixed`), 34.0 s (a later run) |
+| 7ohr.cif | 34.1 s | 131 s | 1.05 GB | 34.5 s |
+| 9syg.cif | 39.5 s | 156 s | 1.13 GB | 40.4 s |
+
+Against the original on 7OHR.pdb (1,374.6 s wall, 6,929 s CPU, 24.8 GB) this is 41x wall, 49x CPU and
+24x less memory.
+
+The output files (`_crosslink_list.txt` and `_crosslinks.pdb`) of `opt_head` are byte-identical to the
+earlier runs: both repeats of all five structures against `opt_fixed`, 7OHR.pdb against the `opt_fixed`
+run and the later run, and 7ohr.cif and 9syg.cif against their earlier runs. None of the later changes
+altered these results. These runs do not use `-surface`, `-ligand` or `-includebugs`.
+
 ## Ligand mode check on 12AH (added later the same day)
 
 Question: do the reference ligand results (original code, hetero atoms included) differ from the optimized `-ligand` output? Tested
@@ -176,11 +213,12 @@ Harness and small result files, in `benchmark/` next to this document's parent `
   `compare.py <run_A> <run_B>` (SASD, Euclidean and path comparison of two `Jwalk_results/`),
   `summarize_timings.py`.
 - Timings: `timings.log` (one line per run: variant, repeat, file, wall, user, sys, max RSS in kB, exit
-  status), `timings_7OHR.log`; per-run `*.log` (jwalk stdout) and `*.time` under `runs/`.
+  status), `timings_7OHR.log`, `timings_opt_head.log` (the 6-CPU runs of the re-run); per-run `*.log` (jwalk stdout) and `*.time` under `runs/`.
 - Comparisons: `cmp_orig_vs_bugs.json`, `cmp_bugs_vs_fixed.json`, `cmp_orig_vs_fixed.json`.
 
 Not kept in the repository: the variant source copies (`orig` is the installed original with the one
-line reverted, the others are commit `2c4d84e` with and without the patch) and the `Jwalk_results/`
+line reverted, `opt_fixed` and `opt_bugs` are commit `2c4d84e` with and without the patch, and `opt_head`
+is commit `8a4e547`) and the `Jwalk_results/`
 output of every run (about 440 MB, regenerable with the scripts).
 
 To repeat: put the PDB files or symlinks to them in a directory, write their names to `pdb_order.txt`,
