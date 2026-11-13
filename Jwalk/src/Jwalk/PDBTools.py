@@ -22,7 +22,11 @@
 
 from numpy import ndarray, array, append, matrix
 from Bio.PDB import PDBParser as PDBParserBiopy
+from Bio.PDB import MMCIFParser as MMCIFParserBiopy
+from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 import os
+import re
+import string
 
 class Vector:
     """A class representing Cartesian 3-dimensonal vectors."""
@@ -306,10 +310,9 @@ class BioPyAtom:
 #             
         self.occ = atom.get_occupancy()
         self.temp_fac = atom.get_bfactor()
-        try:
-            self.elem = atom.get_element()
-        except:
-                self.elem=""
+        # Biopython reads the element column, or works it out from the atom name if it is blank.
+        # (atom.get_element() does not exist, so the element used to be lost here.)
+        self.elem = (getattr(atom, "element", None) or "").strip().upper()
         self.charge=""  
             #Mass of atom as given by atomicMasses global constant. Defaults to 1.
         self.mass = 1.0
@@ -472,40 +475,299 @@ class BioPyAtom:
         line += self.charge.strip().ljust(2)
         return line + '\n'
 
+MMCIF_EXTENSIONS = ('.cif', '.mmcif')
+WATER_NAMES = ('HOH', 'WAT')  # the residue names Biopython treats as water
+
+def is_mmcif(filename):
+    """True if filename is an mmCIF file, judged by its extension (.cif or .mmcif, any case)."""
+    return filename.lower().endswith(MMCIF_EXTENSIONS)
+
+def _blank(value):
+    """mmCIF writes a missing value as ? or . where Biopython uses a space."""
+    return " " if value in ("?", ".") else value
+
+def polymer_residues(mmcif_dict):
+
+    """
+
+    Returns the set of (chain, residue number, insertion code) of every residue that belongs to a
+    polymer chain, from the _pdbx_poly_seq_scheme category of an mmCIF file. The identifiers are
+    the author ones (pdb_strand_id, pdb_seq_num), which are what Biopython gives the structure.
+
+    Modified residues such as MSE, PSU or OMG are written as HETATM records but are listed here,
+    so this tells a residue of a chain from a ligand or ion. Empty if the category is missing.
+
+    Arguments:
+
+       *mmcif_dict*
+           Bio.PDB.MMCIF2Dict of the file
+
+    """
+
+    try:
+        chains = mmcif_dict["_pdbx_poly_seq_scheme.pdb_strand_id"]
+        numbers = mmcif_dict["_pdbx_poly_seq_scheme.pdb_seq_num"]
+        icodes = mmcif_dict["_pdbx_poly_seq_scheme.pdb_ins_code"]
+    except KeyError:
+        return set()
+    if isinstance(chains, str):
+        chains, numbers, icodes = [chains], [numbers], [icodes]
+
+    residues = set()
+    for chain, number, icode in zip(chains, numbers, icodes):
+        if number in ("?", "."):  # in the sequence but not in the model
+            continue
+        residues.add((chain, int(number), _blank(icode)))
+    return residues
+
+def is_hydrogen(atom, by_element):
+
+    """
+
+    True for a hydrogen or deuterium atom. An mmCIF file carries a reliable element symbol, so
+    that is used; a PDB file is judged by the first letter of the atom name, as Jwalk always has.
+
+    Arguments:
+
+       *atom*
+           Biopython atom
+       *by_element*
+           use the element if the file gave one
+
+    """
+
+    if by_element:
+        element = (getattr(atom, "element", None) or "").strip().upper()
+        if element:
+            return element in ("H", "D")
+    return atom.get_id()[0] == "H"
+
 def read_PDB_file(filename,hetatm=False,water=False):
-        
-        # hydrogens are omitted.
-        p=PDBParserBiopy(QUIET=True)#permissive default True
-        structure=p.get_structure("id", filename)
-        
+
+        """
+
+        Reads a PDB or mmCIF file (told apart by extension) into a BioPy_Structure.
+
+        Hydrogens are omitted. Every residue of the polymer chains is read, including the modified
+        residues that an mmCIF file writes as HETATM (MSE, PSU, OMG, ...). Other hetero residues
+        (ligands, ions) are read only with hetatm=True and water only with water=True. A PDB file
+        has no record of which HETATM residues belong to a chain, so there they count as ligands.
+
+        Arguments:
+
+           *filename*
+               .pdb, .cif or .mmcif file
+           *hetatm*
+               include ligands and ions
+           *water*
+               include water
+
+        """
+
+        mmcif = is_mmcif(filename)
+        if mmcif:
+            p = MMCIFParserBiopy(QUIET=True)
+            structure = p.get_structure("id", filename)
+            # the parser keeps the parsed file; it is read again only if that ever changes
+            mmcif_dict = getattr(p, "_mmcif_dict", None)
+            if mmcif_dict is None:
+                mmcif_dict = MMCIF2Dict(filename)
+            polymer = polymer_residues(mmcif_dict)
+        else:
+            p = PDBParserBiopy(QUIET=True)#permissive default True
+            structure = p.get_structure("id", filename)
+            polymer = set()
+
         atomList = []
         hetatomList=[]
         wateratomList=[]
         footer = ''
         header = ''
-        
+
         residues = structure[0].get_residues()
         for res in residues:
-            hetfield=res.get_id()[0]
-            if hetfield[0]=="H":
+            hetfield, number, icode = res.get_id()
+            if hetfield[0]=="H" and (res.get_parent().get_id(), number, icode) in polymer:
+                # a modified residue of a chain is part of the structure like any other residue
                 for atom in res:
-                    BioPyAtom(atom)
+                    if not is_hydrogen(atom, mmcif):
+                        atomList.append(BioPyAtom(atom))
+            elif hetfield[0]=="H":
+                for atom in res:
                     hetatomList.append(BioPyAtom(atom))
             elif hetfield[0]=="W":
                 for atom in res:
-                    BioPyAtom(atom)
                     wateratomList.append(BioPyAtom(atom))
             else:
                 for atom in res:
-                    if atom.id[0] != "H":
-                        BioPyAtom(atom)
+                    if not is_hydrogen(atom, mmcif):
                         atomList.append(BioPyAtom(atom))
         if hetatm:
             atomList = append(atomList, hetatomList)
         if water:
             atomList = append(atomList, wateratomList)
-        
+
         return BioPy_Structure(atomList, filename, header, footer)
+
+# a value of an mmCIF row: a word, or text in single or double quotes, where a quote ends the text
+# only when white space follows it (O5' and "O5'" are both one value)
+_CIF_VALUE = re.compile(r"""'(?:[^']|'(?=\S))*'(?=\s|$)|"(?:[^"]|"(?=\S))*"(?=\s|$)|\S+""")
+
+def cif_values(line):
+    """The values of one row of an mmCIF loop, quotes kept."""
+    return _CIF_VALUE.findall(line)
+
+def write_mmcif_subset(filename, outname, keep, chain_labels=None):
+
+    """
+
+    Copies an mmCIF file keeping only the rows of the _atom_site loop for which keep(...) is true.
+    Every other line is copied unchanged.
+
+    Returns chain_labels if the chains of the rows that are kept were renamed, and {} if not: the
+    chains are renamed only if the loop has the columns needed to find them and every row splits into
+    one value per column (a row that is a text field of several lines does not), so that the copy
+    is never part renamed.
+
+    Arguments:
+
+       *filename*
+           mmCIF file to read
+       *outname*
+           file to write
+       *keep*
+           function (group, chain, number, icode, residue_name) -> bool, where group is ATOM or
+           HETATM, chain and number are the author chain and residue number (number as an int, or
+           None if it isn't one), icode the insertion code or a space and residue_name the author
+           residue name
+       *chain_labels*
+           {author chain: label}: the author chain of every row that is kept is replaced by its
+           label (a row that is kept is written with single spaces between its values then)
+
+    """
+
+    with open(filename) as inf:
+        lines = inf.readlines()
+
+    out = []
+    columns = []
+    applied = {}
+    i = 0
+    n = len(lines)
+    while i < n and not lines[i].startswith("_atom_site."):
+        out.append(lines[i])
+        i += 1
+    while i < n and lines[i].startswith("_atom_site."):
+        columns.append(lines[i].split()[0][len("_atom_site."):])
+        out.append(lines[i])
+        i += 1
+
+    index = dict((c, k) for k, c in enumerate(columns))
+    needed = ("group_PDB", "auth_asym_id", "auth_seq_id", "pdbx_PDB_ins_code", "auth_comp_id")
+    if columns and all(c in index for c in needed):
+        end = i
+        while end < n:
+            line = lines[end]
+            if line.startswith("#") or line.startswith("_") or line.startswith("loop_") or not line.strip():
+                break
+            end += 1
+        rows = [(line, cif_values(line)) for line in lines[i:end]]
+        relabel = bool(chain_labels) and all(len(tokens) == len(columns) for line, tokens in rows)
+        for line, tokens in rows:
+            if len(tokens) == len(columns):
+                try:
+                    number = int(tokens[index["auth_seq_id"]])
+                except ValueError:
+                    number = None
+                if not keep(tokens[index["group_PDB"]], tokens[index["auth_asym_id"]], number,
+                            _blank(tokens[index["pdbx_PDB_ins_code"]]), tokens[index["auth_comp_id"]]):
+                    continue
+                if relabel:
+                    chain = tokens[index["auth_asym_id"]]
+                    tokens[index["auth_asym_id"]] = chain_labels.get(chain, chain)
+                    line = " ".join(tokens) + "\n"
+            out.append(line)
+        i = end
+        if relabel:
+            applied = chain_labels
+    out.extend(lines[i:])
+
+    with open(outname, "w") as outf:
+        outf.writelines(out)
+
+    return applied
+
+def surface_chain_labels(chains):
+
+    """
+
+    Returns {chain: label} giving every chain a label of the same length (at least two characters,
+    from 0-9, A-Z and a-z). freesasa writes the chain label and the residue number of a residue
+    as one word in the .rsa file of an mmCIF input (chain A0, residue 22 is A022), which names
+    exactly one residue only if the labels are all of one length: A0 22 and A02 2 are both A022.
+
+    Arguments:
+
+       *chains*
+           the author chains of the file
+
+    """
+
+    alphabet = string.digits + string.ascii_uppercase + string.ascii_lowercase
+    unique = list(dict.fromkeys(chains))
+    width = 2
+    while len(alphabet) ** width < len(unique):
+        width += 1
+
+    labels = {}
+    for k, chain in enumerate(unique):
+        label = ""
+        for _ in range(width):
+            label = alphabet[k % len(alphabet)] + label
+            k //= len(alphabet)
+        labels[chain] = label
+    return labels
+
+def write_mmcif_for_surface(filename, outname, ligands):
+
+    """
+
+    Writes the copy of an mmCIF file that freesasa is given under -surface: the same atoms Jwalk
+    puts in its grid. The polymer chains with their modified residues are always kept, ligands and
+    ions only if ligands is true (-ligand), water never. Hydrogens are left to freesasa, which
+    ignores them unless asked.
+
+    The chains are renamed to labels of one length (surface_chain_labels), so that the word
+    freesasa makes of a chain label and a residue number names one residue; the labels are
+    returned as {author chain: label}. If the copy could not be renamed (see write_mmcif_subset)
+    it keeps the author chains and {} is returned.
+
+    Arguments:
+
+       *filename*
+           mmCIF file
+       *outname*
+           file to write
+       *ligands*
+           keep ligands and ions
+
+    """
+
+    mmcif_dict = MMCIF2Dict(filename)
+    polymer = polymer_residues(mmcif_dict)
+    chains = mmcif_dict.get("_atom_site.auth_asym_id", [])
+    if isinstance(chains, str):
+        chains = [chains]
+    labels = surface_chain_labels(chains)
+
+    def keep(group, chain, number, icode, residue_name):
+        if group != "HETATM":
+            return True
+        if (chain, number, icode) in polymer:
+            return True
+        return ligands and residue_name not in WATER_NAMES
+
+    return write_mmcif_subset(filename, outname, keep, labels)
         
 def write_sasd_to_txt(sasds,pdb):
 	
@@ -524,7 +786,7 @@ def write_sasd_to_txt(sasds,pdb):
 	if not os.path.exists('./Jwalk_results'):
 		os.makedirs('./Jwalk_results')
 		
-	with open('./Jwalk_results/%s_crosslink_list.txt' % pdb[:-4],'w') as outf:
+	with open('./Jwalk_results/%s_crosslink_list.txt' % os.path.splitext(os.path.basename(pdb))[0],'w') as outf:
 		
 		outf.write(' '.join('{0:<13}'.format(col) for col in ['Index','Model','Atom1','Atom2','SASD','Euclidean Distance']))
 		outf.write('\n')
@@ -571,7 +833,7 @@ def write_sasd_to_pdb(dens_map,sasds,pdb):
 		
 		path_coord[xl] = a
 		
-	with open('./Jwalk_results/%s_crosslinks.pdb' % pdb[:-4],'w') as pdb:
+	with open('./Jwalk_results/%s_crosslinks.pdb' % os.path.splitext(os.path.basename(pdb))[0],'w') as pdb:
 		
 		m_count = 1
 		for xl in path_coord:
@@ -581,25 +843,16 @@ def write_sasd_to_pdb(dens_map,sasds,pdb):
 			count = 1
 			pdb.write('MODEL %d %s%d%s-%s%d%s\n' % (m_count,res1,aa1,chain1,res2,aa2,chain2))
 			m_count = m_count+1
+			lines = []
 			for (x,y,z) in path_coord[xl]:
-				p=Vector(x,y,z)
-				a=p.to_atom()
-				a.record_name = 'ATOM'
-				a.serial = count
-				a.atom_name = 'C'
-				a.alt_loc = ''
-				a.res = 'GLY'
-				a.chain = 'A'
-				a.res_no = count
-				a.icode = ''
-				a.occ = 1
-				a.temp_fac = 0
-				a.elem = 'C'
-				a.charge = ''
-				#print a.__dict__
-				#atom = BioPyAtom(a)
-				pdb.write(a.write_to_PDB())
+				# the record BioPyAtom.write_to_PDB makes for a carbon atom of a glycine
+				line = 'ATOM'.ljust(6) + str(count).rjust(5) + ' ' + 'C'.center(4) + ''.ljust(1) + 'GLY'.ljust(3) + ' ' + 'A'.ljust(1) + str(count).rjust(4) + ''.ljust(1) + '   '
+				line += ('%.3f' % x).rjust(8) + ('%.3f' % y).rjust(8) + ('%.3f' % z).rjust(8)
+				line += ('%.2f' % float(1)).rjust(6) + ('%.2f' % float(0)).rjust(6) + '          '
+				line += 'C'.rjust(2) + ''.ljust(2) + '\n'
+				lines.append(line)
 				count +=1
+			pdb.writelines(lines)
 			pdb.write('END\n') 
         
 

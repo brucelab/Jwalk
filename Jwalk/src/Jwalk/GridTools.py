@@ -20,7 +20,7 @@
 #
 #===============================================================================
 
-from numpy import array,  zeros, real,sqrt,exp
+from numpy import array,  zeros, real,sqrt,exp, bincount
 from collections import OrderedDict
 import sys
 
@@ -203,6 +203,9 @@ def process_input_crosslinks(uv_xl):
     with open(uv_xl) as xl_in:
         for line in xl_in:
             count +=1
+            # skip blank lines
+            if len(line.strip()) == 0:
+                continue
             col = line.split("|")
             try:
                 chain1 = col[1].rstrip()
@@ -253,46 +256,40 @@ def mark_CAlphas_pairs(densMap, prot, uv_xl):
     aa1_CA = OrderedDict()
     aa2_CA = OrderedDict()
 
-    atom_check = []
+    # sets, so checking each atom against the residues in the list is quick
+    aa1_set = set((x[0], x[1]) for x in aa1)
+    aa2_set = set((x[0], x[1]) for x in aa2)
+    atom_check = set()
     
     for atom in prot.atomList:    
-        if [atom.res_no,atom.chain] in aa1:
+        if (atom.res_no,atom.chain) in aa1_set:
             if atom.atom_name == "CA":
                 pos = mapGridPosition(densMap, atom)
                 aa1_CA[atom.res_no,atom.chain,atom.res]=[pos[0],pos[1],pos[2]]
-                atom_check.append([atom.res_no,atom.chain])
-        if [atom.res_no,atom.chain] in aa2:
+                atom_check.add((atom.res_no,atom.chain))
+        if (atom.res_no,atom.chain) in aa2_set:
             if atom.atom_name == "CA":
                 pos = mapGridPosition(densMap, atom)
                 aa2_CA[atom.res_no,atom.chain,atom.res]=[pos[0],pos[1],pos[2]]
-                atom_check.append([atom.res_no,atom.chain])
+                atom_check.add((atom.res_no,atom.chain))
     
     # check that all the residues listed are in the structure
-    rem_x = []
+    rem_x = set()
     
     for x in aa1:
-        if x not in atom_check:
+        if (x[0], x[1]) not in atom_check:
             print("ERROR ! Residue",x[0],"-",x[1], "not in pdb structure - please check input files")
-            rem_x.append((x[0], x[1]))
+            rem_x.add((x[0], x[1]))
     for x in aa2:
-        if x not in atom_check:
+        if (x[0], x[1]) not in atom_check:
             print("ERROR ! Residue",x[0],"-",x[1], "not in pdb structure - please check input files")
-            rem_x.append((x[0], x[1]))
+            rem_x.add((x[0], x[1]))
         
     # remove crosslinks from crosslink_pairs if one or both residues are not in structure
-    index_to_delete = []
-    
-    for i in range(len(crosslink_pairs)):
-        [x1, x2] = crosslink_pairs[i]
-        if x1 in rem_x:
-            index_to_delete.append(i)
-        elif x2 in rem_x:
-            index_to_delete.append(i)
-    
     crosslink_pairs_hold = []
-    for i in range(len(crosslink_pairs)):
-        if i not in index_to_delete:
-            crosslink_pairs_hold.append(crosslink_pairs[i])
+    for x1, x2 in crosslink_pairs:
+        if x1 not in rem_x and x2 not in rem_x:
+            crosslink_pairs_hold.append([x1, x2])
             
     # append residue name to crosslink_pairs_final
     
@@ -309,7 +306,27 @@ def mark_CAlphas_pairs(densMap, prot, uv_xl):
         
     return crosslink_pairs_final, aa1_CA, aa2_CA
                  
-def generate_solvent_accessible_surface(densMap,prot,aa1_CA, aa2_CA):
+def atom_element(atom):
+
+    """
+
+    Returns the element symbol of an atom in upper case, from the element read with the PDB
+    file. If there is none, the first letter of the atom name is used, which is what Jwalk assumed
+    before elements were read (right for protein atoms, wrong for two letter elements such as CA
+    for calcium or CL).
+
+    Arguments:
+
+       *atom*
+           BioPyAtom
+
+    """
+    elem = (getattr(atom, 'elem', '') or '').strip().upper()
+    if elem:
+        return elem
+    return atom.atom_name[:1].upper()
+
+def generate_solvent_accessible_surface(densMap,prot,aa1_CA, aa2_CA, legacy_spheres=False):
     
     """
     
@@ -325,61 +342,82 @@ def generate_solvent_accessible_surface(densMap,prot,aa1_CA, aa2_CA):
            voxel positions of each C_alpha atom of interest
         *aa2_CA*
            voxel positions of each C_alpha atom of interest
+        *legacy_spheres*
+           choose the sphere as the original Jwalk did (-includebugs): from the first letter of
+           the atom name, C, N, O and S only, and no sphere at all for any other atom (P, Se,
+           metals, ...). For protein atoms this is the same as the element rule.
            
     """
-    # store different radii for each atom and calculate the voxel spheres for each
-    sphere = {}
-    radius = {}
-    
+    # radius of each element. C, N, O and S are the values Jwalk has always used; the others
+    # (ligand and ion elements) are Bondi van der Waals radii. Any element not listed, such as a
+    # metal, gets the carbon radius, the largest of the protein atoms, so that an unknown atom is
+    # never left out of the surface.
     C = 0.8
-    
-    radius['CA'] = 1.73 + C
-    radius['S'] = 1.67 + C
-    radius['N'] = 1.43 + C
-    radius['OH'] = 1.30 + C
-    
-    for r in radius:
-        
-        sphere[r] = []
-        rad = int(round(radius[r]/densMap.apix))
-        
-        for x in range(-rad,rad+1):
-            for y in range(-rad,rad+1):
-                for z in range(-rad,rad+1):
-                    if (x**2 + y**2 + z**2) <= (rad**2):
-                        sphere[r].append([x,y,z])
-        
-    backbone = ['N','CA','C','O']                         
-    
-    # generate solvent accessible surface
-    
+
+    radius = {'C': 1.73, 'N': 1.43, 'O': 1.30, 'S': 1.67,
+              'P': 1.80, 'SE': 1.90, 'F': 1.47, 'CL': 1.75, 'BR': 1.85, 'I': 1.98}
+    default_radius = radius['C']
+
+    # hydrogens are not part of the surface (read_PDB_file already drops the protein ones)
+    hydrogens = {'H', 'D'}
+
+    def voxel_radius(elem):
+        return int(round((radius.get(elem, default_radius) + C)/densMap.apix))
+
+    # voxel sphere for each radius in voxels, built when first needed
+    sphere = {}
+
+    def voxel_sphere(rad):
+        if rad not in sphere:
+            sphere[rad] = []
+            for x in range(-rad,rad+1):
+                for y in range(-rad,rad+1):
+                    for z in range(-rad,rad+1):
+                        if (x**2 + y**2 + z**2) <= (rad**2):
+                            sphere[rad].append([x,y,z])
+        return sphere[rad]
+
+    backbone = ['N','CA','C','O']
+
+    # grid voxel of each atom that has a sphere placed around it, by radius in voxels
+    centres = {}
+
     for atom in prot.atomList:
-        
+
         pos = mapGridPosition(densMap, atom)
-            
+
         if pos:
             # don't place side chain atoms of residues of interest in the surface
             if ((atom.res_no,atom.chain,atom.res) in aa1_CA and atom.atom_name not in backbone) or (
             (atom.res_no,atom.chain,atom.res) in aa2_CA and atom.atom_name not in backbone):
                 pass
-            # for each atom, expand the corresponding voxel sphere around it to create solvent accessible surface
             else:
-                if atom.atom_name[:1] == 'C':
-                    for (x,y,z) in sphere['CA']:
-                        if((densMap.x_size() > (pos[0]+x) >= 0) and (densMap.y_size() > (pos[1]+y) >= 0) and (densMap.z_size() > (pos[2]+z) >= 0)):
-                            densMap.fullMap[pos[2]+z][pos[1]+y][pos[0]+x] += 1
-                elif atom.atom_name[:1] == 'O':
-                    for (x,y,z) in sphere['OH']:
-                        if((densMap.x_size() > (pos[0]+x) >= 0) and (densMap.y_size() > (pos[1]+y) >= 0) and (densMap.z_size() > (pos[2]+z) >= 0)):
-                            densMap.fullMap[pos[2]+z][pos[1]+y][pos[0]+x] += 1
-                elif atom.atom_name[:1] == 'N':
-                    for (x,y,z) in sphere['N']:
-                        if((densMap.x_size() > (pos[0]+x) >= 0) and (densMap.y_size() > (pos[1]+y) >= 0) and (densMap.z_size() > (pos[2]+z) >= 0)):
-                            densMap.fullMap[pos[2]+z][pos[1]+y][pos[0]+x] += 1
-                elif atom.atom_name[:1] == 'S':
-                    for (x,y,z) in sphere['S']:
-                        if((densMap.x_size() > (pos[0]+x) >= 0) and (densMap.y_size() > (pos[1]+y) >= 0) and (densMap.z_size() > (pos[2]+z) >= 0)):
-                            densMap.fullMap[pos[2]+z][pos[1]+y][pos[0]+x] += 1
+                if legacy_spheres:
+                    elem = atom.atom_name[:1].upper()
+                    if elem in ('C', 'N', 'O', 'S'):
+                        centres.setdefault(voxel_radius(elem), []).append(pos[:3])
+                else:
+                    elem = atom_element(atom)
+                    if elem not in hydrogens:
+                        centres.setdefault(voxel_radius(elem), []).append(pos[:3])
+
+    # for each atom, expand the corresponding voxel sphere around it to create solvent accessible surface
+    z_size, y_size, x_size = densMap.fullMap.shape
+    limit = array([x_size, y_size, z_size])
+
+    for r in sorted(centres):
+
+        offsets = array(voxel_sphere(r))
+        counts = zeros(densMap.fullMap.size, dtype=int)
+
+        # in blocks of atoms to limit the memory used
+        for i in range(0, len(centres[r]), 2000):
+            voxels = (array(centres[r][i:i+2000])[:,None,:] + offsets[None,:,:]).reshape(-1,3)
+            voxels = voxels[((voxels >= 0) & (voxels < limit)).all(axis=1)]
+            counts += bincount((voxels[:,2]*y_size + voxels[:,1])*x_size + voxels[:,0],
+                               minlength=counts.size)
+        
+        densMap.fullMap += counts.reshape(densMap.fullMap.shape)
                             
     return densMap
         
@@ -432,13 +470,6 @@ def find_surface_voxels(aa1_CA, densMap, surface, xl_list = []):
     # generate voxel spheres shells to progressively extend search for starting voxels
     # this is to keep starting voxels as close to CA as possible.    
     
-    sphere1 = []
-    sphere2 = []
-    sphere3 = []
-    sphere4 = []
-    sphere5 = []
-    sphere6 = []
-    
     C = 1.68
     
     radius = 1.73 + C
@@ -450,49 +481,22 @@ def find_surface_voxels(aa1_CA, densMap, surface, xl_list = []):
     radius5 = radius4 + 1
     radius6 = radius5 + 1
     
-    for x in range(-radius1,radius1+1):
-        for y in range(-radius1,radius1+1):
-            for z in range(-radius1,radius1+1):
-                if (x**2 + y**2 + z**2) <= (radius1**2):
-                    sphere1.append([x,y,z])
-                    
-    for x in range(-radius2,radius2+1):
-        for y in range(-radius2,radius2+1):
-            for z in range(-radius2,radius2+1):
-                if (x**2 + y**2 + z**2) <= (radius2**2):
-                    if ([x,y,z]) not in sphere1:
-                        sphere2.append([x,y,z])
-                    
-    for x in range(-radius3,radius3+1):
-        for y in range(-radius3,radius3+1):
-            for z in range(-radius3,radius3+1):
-                if (x**2 + y**2 + z**2) <= (radius3**2):
-                    if ([x,y,z]) not in sphere1 and ([x,y,z]) not in sphere2:
-                        sphere3.append([x,y,z])
-                                    
-    for x in range(-radius4,radius4+1):
-        for y in range(-radius4,radius4+1):
-            for z in range(-radius4,radius4+1):
-                if (x**2 + y**2 + z**2) <= (radius4**2):
-                    if ([x,y,z]) not in sphere1 and ([x,y,z]) not in sphere2 and (
-                    [x,y,z]) not in sphere3:
-                        sphere4.append([x,y,z])
+    # each shell holds the voxels of a sphere that are not in a smaller one
+    shells = []
+    seen = set()
     
-    for x in range(-radius5,radius5+1):
-        for y in range(-radius5,radius5+1):
-            for z in range(-radius5,radius5+1):
-                if (x**2 + y**2 + z**2) <= (radius5**2):
-                    if ([x,y,z]) not in sphere1 and ([x,y,z]) not in sphere2 and (
-                    [x,y,z]) not in sphere3 and ([x,y,z]) not in sphere4:
-                        sphere5.append([x,y,z])
-                        
-    for x in range(-radius6,radius6+1):
-        for y in range(-radius6,radius6+1):
-            for z in range(-radius6,radius6+1):
-                if (x**2 + y**2 + z**2) <= (radius6**2):
-                    if ([x,y,z]) not in sphere1 and ([x,y,z]) not in sphere2 and (
-                    [x,y,z]) not in sphere3 and ([x,y,z]) not in sphere4 and ([x,y,z]) not in sphere5:
-                        sphere6.append([x,y,z])
+    for r in (radius1, radius2, radius3, radius4, radius5, radius6):
+        shell = []
+        for x in range(-r,r+1):
+            for y in range(-r,r+1):
+                for z in range(-r,r+1):
+                    if (x**2 + y**2 + z**2) <= (r**2):
+                        if (x,y,z) not in seen:
+                            shell.append([x,y,z])
+        seen.update(tuple(v) for v in shell)
+        shells.append(shell)
+    
+    sphere1, sphere2, sphere3, sphere4, sphere5, sphere6 = shells
     
     # iterate through sphere shells and append starting voxels to dictionary
                     

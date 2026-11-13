@@ -22,7 +22,13 @@
 
 import sys
 from math import cos, sin
+import shutil
 import subprocess
+import tempfile
+from Jwalk import PDBTools
+import os
+import re
+import string
 
 def expand_points(atom,sphere):
     """ Exapnd the unit sphere around specific x,y,z point and returns surface points"""
@@ -167,35 +173,25 @@ def update_crosslink_pairs(crosslink_pairs, aa1_CA, aa2_CA, remove_aa1, remove_a
     
     '''Removes buried residues from crosslink_pairs'''
     
-    buried_residues = []
-    index_to_delete = []
+    index_to_delete = set()
+    
+    # sets, so checking each residue pair against the residues to remove is quick
+    remove_aa1_set = set((x[0], x[1]) for x in remove_aa1)
+    remove_aa2_set = set((x[0], x[1]) for x in remove_aa2)
     
     for i in range(len(crosslink_pairs)): # for each residue pair, check both are solvent accessible
         
         x1, x2 = crosslink_pairs[i]
         
         if x1 not in aa1_CA:
-            index_to_delete.append(i)
-            if x1 not in buried_residues:
-                buried_residues.append(x1)
-            if x2 not in aa2_CA and x2 not in buried_residues:
-                buried_residues.append(x2)
+            index_to_delete.add(i)
         elif x2 not in aa2_CA:
-            index_to_delete.append(i)
-            if x2 not in buried_residues:  
-                buried_residues.append(x2)
+            index_to_delete.add(i)
                 
-        if [x1[0],x1[1]] in remove_aa1:
-            index_to_delete.append(i)
-            if x1 not in buried_residues:
-                buried_residues.append(x1)
-            if x2 in remove_aa2 and not x2 in buried_residues:
-                buried_residues.append(x2)
-        
-        elif [x2[0],x2[1]] in remove_aa2:        
-            index_to_delete.append(i)
-            if x2 not in buried_residues:
-                buried_residues.append(x2)
+        if (x1[0],x1[1]) in remove_aa1_set:
+            index_to_delete.add(i)
+        elif (x2[0],x2[1]) in remove_aa2_set:        
+            index_to_delete.add(i)
     
     no_sasd_possible = []
     crosslink_pairs_final = []
@@ -212,7 +208,151 @@ def update_crosslink_pairs(crosslink_pairs, aa1_CA, aa2_CA, remove_aa1, remove_a
                     
     return crosslink_pairs_final
     
-def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa", xl_list = False):
+def rsa_words(residues, labels=None):
+
+    """
+
+    Returns {(residue name, chain + residue number): (res_no, chain, res)} for the residues of
+    interest, the form in which a freesasa .rsa made from an mmCIF file names a residue.
+
+    The chain is the label the chain was given in the file freesasa read (PDBTools.
+    write_mmcif_for_surface); the labels all have one length, so a word names one residue. Without
+    labels the chain itself is used, which is only unambiguous if no two residues have the same
+    word (chain A0, residue 22 and chain A02, residue 2 do). A ValueError naming the residues is
+    raised if two of them do.
+
+    Arguments:
+
+       *residues*
+           {(res_no, chain, res) : ...}
+       *labels*
+           {chain: label} as returned by PDBTools.write_mmcif_for_surface
+
+    """
+
+    labels = labels or {}
+    words = {}
+    clashes = {}
+    for (num, chain, res) in residues:
+        key = (res, labels.get(chain, chain.strip()) + str(num))
+        if key in words:
+            clashes.setdefault(key, [words[key]]).append((num, chain, res))
+        else:
+            words[key] = (num, chain, res)
+
+    if clashes:
+        described = []
+        for key, clashing in clashes.items():
+            described.append("%s (%s)" % (" and ".join("%s %d of chain %s" % (res, num, chain)
+                                                       for (num, chain, res) in clashing), key[1]))
+        raise ValueError("freesasa names these residues by the same word, so their accessibility cannot "
+                         "be told apart: " + "; ".join(described))
+    return words
+
+def parse_rsa_line(line, words=None):
+
+    """
+
+    Reads one RES line of a freesasa .rsa file.
+
+    Returns (residue number, chain, residue name, relative all-atom SASA) or None if the line is
+    not a residue line or has no relative SASA (freesasa writes N/A for hetero residues).
+
+    The columns are separated by whitespace rather than fixed, because freesasa 2.1 moved the
+    chain to make room for longer chain labels. With a chain the line is
+    RES LYS A 21 ABS REL ... (14 fields), without one RES LYS 21 ABS REL ... (13 fields).
+    An insertion code on the residue number is dropped, as it is everywhere else in Jwalk.
+
+    With mmCIF input freesasa runs the chain label and the residue number together (A022 is
+    residue 22 of chain A0). Such a line is matched against words, the output of rsa_words for
+    the residues of interest, first as written and then without a trailing insertion code; if it
+    is not there, the line is not a residue of interest and None is returned.
+
+    Arguments:
+
+       *line*
+           one line of the .rsa file
+       *words*
+           output of rsa_words, for a .rsa made from an mmCIF file
+
+    """
+
+    if not line.startswith("RES"):
+        return None
+
+    col = line.split()
+
+    if words and len(col) == 13:
+        word = col[2]
+        key = (col[1], word) if (col[1], word) in words else (col[1], word.rstrip(string.ascii_letters))
+        if key not in words:
+            # not a residue of interest; the word is not a residue number, so it is not read as one
+            return None
+        num, chain, name = words[key]
+        try:
+            return num, chain, name, float(col[4])
+        except ValueError:
+            return None
+
+    if len(col) == 14:
+        name, chain, num, rel = col[1], col[2], col[3], col[5]
+    elif len(col) == 13:
+        name, chain, num, rel = col[1], " ", col[2], col[4]
+    else:
+        return None
+
+    number = re.match(r"-?\d+", num)
+
+    try:
+        return int(number.group()), chain, name, float(rel)
+    except (AttributeError, ValueError):
+        return None
+
+def write_pdb_without_water(prot, filename):
+
+    """
+
+    Copies a pdb file leaving out the water molecules, so that freesasa --hetatm sees the same
+    atoms as Jwalk does with -ligand (read_PDB_file keeps hetero residues but not water; it
+    treats HOH and WAT as water, as Biopython does).
+
+    Arguments:
+
+       *prot*
+           .pdb file to copy
+       *filename*
+           file to write
+
+    """
+
+    with open(prot) as inf, open(filename, "w") as outf:
+        for line in inf:
+            if line.startswith("HETATM") and line[17:20].strip() in ("HOH", "WAT"):
+                continue
+            outf.write(line)
+
+def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa", xl_list = False, hetatm = False):
+
+    """
+
+    Runs freesasa on the pdb file and returns the residues of aa1_CA that it finds on the surface
+    (relative all-atom SASA above 7%).
+
+    Arguments:
+
+       *prot*
+           .pdb or .cif file
+       *aa1_CA*
+           residues of interest {(res_no, chain, res) : CA voxel}
+       *freesasa_source*
+           freesasa executable
+       *xl_list*
+           True if the residues come from a crosslink list
+       *hetatm*
+           include hetero residues (ligands, ions) in the freesasa calculation, as -ligand does
+           in the Jwalk grid. Water is left out either way.
+
+    """
 
     # dictionary for text output
     string_dict = {"LYS":"lysines",
@@ -237,36 +377,78 @@ def check_solvent_accessibility_freesasa(prot,aa1_CA,freesasa_source = "freesasa
                 "TYR":"tyrosines"
                 }
     
-    cmd = [freesasa_source,"--format=rsa","--output=%s.rsa" % prot[:-4],"--radii=naccess",prot]
-    
-    ext_freesasa = subprocess.Popen(cmd)
-    ext_freesasa.communicate()
-    
+    rsa_file = os.path.splitext(prot)[0] + ".rsa"
+
+    # an .rsa left by an earlier run must not be mistaken for this one's
+    if os.path.exists(rsa_file):
+        os.remove(rsa_file)
+
+    cmd = [freesasa_source,"--format=rsa","--output=%s" % rsa_file,"--radii=naccess"]
+
+    mmcif = PDBTools.is_mmcif(prot)
+    labels = {}
+    words = {}
+
+    # the copies freesasa is given go in a private directory, not next to the input, so that they
+    # cannot be left behind for a later run to pick up as an input file, and so that a read-only
+    # input directory does not stop them being written. The .rsa itself stays next to the input.
+    temp_dir = None
+    base = os.path.splitext(os.path.basename(prot))[0]
+
     try:
-        test_open = open(prot[:-4]+".rsa")
-        test_open.close
-    except:
-        print("No .rsa file created. Please check you have Freesasa installed. Go to 'http://freesasa.github.io/' ")
+        if mmcif or hetatm:
+            temp_dir = tempfile.mkdtemp(prefix="jwalk_")
+
+        if mmcif:
+            # freesasa reads mmCIF with --cif. It is given a copy holding exactly the atoms of Jwalk's
+            # grid (the chains with their modified residues, ligands only with -ligand, no water) and
+            # --hetatm so that it counts the HETATM rows that are left.
+            input_pdb = os.path.join(temp_dir, base + "_jwalk.cif")
+            labels = PDBTools.write_mmcif_for_surface(prot, input_pdb, hetatm)
+            cmd += ["--cif", "--hetatm", input_pdb]
+            # for an mmCIF file freesasa writes the chain label and residue number as one word (A022
+            # for residue 22 of chain A0), so the residues of interest are looked up by that word; the
+            # chains of the copy it reads have labels of one length, which keeps a word from naming
+            # two residues. Checked before freesasa runs, so that nothing is left behind if it can't be.
+            try:
+                words = rsa_words(aa1_CA, labels)
+            except ValueError as error:
+                print("Cannot use -surface on %s: %s. Rename the chains of the file so that a chain "
+                      "followed by a residue number cannot read as another chain with a different "
+                      "number." % (os.path.basename(prot), error))
+                exit(1)
+        elif hetatm:
+            # freesasa --hetatm would also count water, which -ligand leaves out of the grid
+            input_pdb = os.path.join(temp_dir, base + "_nowater.pdb")
+            write_pdb_without_water(prot, input_pdb)
+            cmd += ["--hetatm", input_pdb]
+        else:
+            cmd.append(prot)
+
+        try:
+            ext_freesasa = subprocess.Popen(cmd)
+            ext_freesasa.communicate()
+        except OSError:
+            print("Could not run '%s'. Please check you have Freesasa installed and on your PATH. Go to 'http://freesasa.github.io/' " % freesasa_source)
+            exit(1)
+    finally:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    if not os.path.exists(rsa_file):
+        print("No .rsa file created. Please check you have Freesasa installed, and that the directory of the "
+              "input file is writable, as the .rsa is written next to it. Go to 'http://freesasa.github.io/' ")
         exit(1)
-        
-    #try:
+
     SA_res = {}
-    with open(prot[:-4]+".rsa") as rsa:
+    with open(rsa_file) as rsa:
         for line in rsa:
-            if line.startswith("RES"):
-                col = line.split()
-                RES = line[4:8].strip()
-                CHAIN = line[8:9].strip()
-                if len(CHAIN) == 0:
-                    CHAIN = " "
-                NUM = line[9:13].strip()
-                REL = line[23:29].strip()
-                if float(REL) > 7.0:
-                    
-                    res = RES + CHAIN + NUM
-                    SA_res[(int(NUM),CHAIN,RES)] = True
-    #except:
-    #    print "error"
+            parsed = parse_rsa_line(line, words)
+            if parsed:
+                NUM, CHAIN, RES, REL = parsed
+                if REL > 7.0:
+                    SA_res[(NUM,CHAIN,RES)] = True
+
     SA_res_dict = {}
     
     for s in aa1_CA:

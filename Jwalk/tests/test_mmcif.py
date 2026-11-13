@@ -1,0 +1,589 @@
+#===============================================================================
+#     This file is part of Jwalk.
+#
+#     Tests for mmCIF input: reading .cif files, modified residues of a chain
+#     (HETATM records that belong to a polymer) always included, ligands only
+#     with -ligand, the Euclidean distances taken from the structure, results
+#     identical to the PDB version of the same structure, long chain ids, and
+#     -surface (freesasa --cif) on mmCIF input.
+#
+#     Examples/test.cif and Examples/test_modres.cif are made from
+#     Examples/test.pdb by tests/make_test_cif.py.
+#
+#     Run from the Jwalk directory with the launcher's virtual environment:
+#
+#         src/venv/bin/python -m unittest discover -s tests -v
+#
+#     The -surface tests are skipped when freesasa is not on the PATH.
+#===============================================================================
+
+import contextlib
+import io
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+JWALK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC_DIR = os.path.join(JWALK_DIR, "src")
+EXAMPLES = os.path.join(JWALK_DIR, "Examples")
+TEST_PDB = os.path.join(EXAMPLES, "test.pdb")
+TEST_CIF = os.path.join(EXAMPLES, "test.cif")
+MODRES_CIF = os.path.join(EXAMPLES, "test_modres.cif")
+JWALK_SCRIPT = os.path.join(SRC_DIR, "Jwalk", "jwalk")
+
+sys.path.insert(0, SRC_DIR)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from Bio.PDB.MMCIF2Dict import MMCIF2Dict
+from Jwalk import PDBTools, GridTools, SurfaceTools, SASDTools
+from test_ligand import run_jwalk, read_crosslink_list, lysine_sasds
+
+
+def atom_keys(structure):
+    return [(a.record_name, a.chain, a.res_no, a.res, a.atom_name) for a in structure.atomList]
+
+
+def result_text(directory, name):
+    with open(os.path.join(directory, "Jwalk_results", name + "_crosslink_list.txt")) as f:
+        return f.read()
+
+
+class ReadMMCIF(unittest.TestCase):
+
+    def test_is_mmcif(self):
+        self.assertTrue(PDBTools.is_mmcif("x.cif"))
+        self.assertTrue(PDBTools.is_mmcif("dir/9SYG.CIF"))
+        self.assertTrue(PDBTools.is_mmcif("x.mmcif"))
+        self.assertFalse(PDBTools.is_mmcif("x.pdb"))
+        self.assertFalse(PDBTools.is_mmcif("x.cif.pdb"))
+
+    def test_same_atoms_as_pdb(self):
+        pdb = PDBTools.read_PDB_file(TEST_PDB)
+        cif = PDBTools.read_PDB_file(TEST_CIF)
+        self.assertEqual(len(pdb.atomList), 1001)
+        self.assertEqual(atom_keys(pdb), atom_keys(cif))
+        for a, b in zip(pdb.atomList, cif.atomList):
+            self.assertAlmostEqual(a.x, b.x, places=3)
+            self.assertAlmostEqual(a.y, b.y, places=3)
+            self.assertAlmostEqual(a.z, b.z, places=3)
+            self.assertEqual(a.elem, b.elem)
+
+    def test_ligands_only_with_hetatm_and_never_water(self):
+        without = PDBTools.read_PDB_file(TEST_CIF)
+        with_ligands = PDBTools.read_PDB_file(TEST_CIF, hetatm=True)
+        self.assertEqual(sum(1 for a in without.atomList if a.record_name == "HETATM"), 0)
+        self.assertEqual(len(with_ligands.atomList) - len(without.atomList), 18)
+        names = set(a.res for a in with_ligands.atomList if a.record_name == "HETATM")
+        self.assertEqual(names, {"SE4", "BME"})
+        self.assertEqual(atom_keys(with_ligands), atom_keys(PDBTools.read_PDB_file(TEST_PDB, hetatm=True)))
+
+    def test_polymer_residues(self):
+        residues = PDBTools.polymer_residues(MMCIF2Dict(TEST_CIF))
+        self.assertEqual(len(residues), 124)
+        self.assertIn(("A", 21, " "), residues)
+        self.assertIn(("A", 142, " "), residues)
+        self.assertNotIn(("A", 147, " "), residues)  # SE4 147 is a ligand
+        self.assertEqual(PDBTools.polymer_residues({}), set())
+
+    def test_modified_residue_always_read(self):
+        plain = PDBTools.read_PDB_file(TEST_PDB)
+        modres = PDBTools.read_PDB_file(MODRES_CIF)
+        self.assertEqual(len(modres.atomList), len(plain.atomList))
+        mse = [a for a in modres.atomList if a.res_no == 142]
+        self.assertEqual(len(mse), 8)
+        self.assertTrue(all(a.res == "MSE" and a.record_name == "HETATM" for a in mse))
+        self.assertEqual([a.elem for a in mse if a.atom_name == "SE"], ["SE"])
+        # still no ligands without hetatm
+        self.assertEqual(set(a.res for a in modres.atomList if a.record_name == "HETATM"), {"MSE"})
+        # and with hetatm the ligands come too
+        self.assertEqual(len(PDBTools.read_PDB_file(MODRES_CIF, hetatm=True).atomList), len(plain.atomList) + 18)
+
+    def test_modified_residue_is_an_obstacle_not_a_site(self):
+        structure = PDBTools.read_PDB_file(MODRES_CIF)
+        grid = GridTools.makeGrid(structure, 1)
+        aa1_CA, aa2_CA = GridTools.markCAlphas(grid, structure, "LYS", "LYS")
+        self.assertEqual(len(aa1_CA), 12)
+        self.assertNotIn((142, "A", "MSE"), aa1_CA)
+        aa1_CA, aa2_CA = GridTools.markCAlphas(grid, structure, "MET", "LYS")
+        self.assertNotIn((142, "A", "MSE"), aa1_CA)  # written as MSE, so not a MET either
+
+    def test_hydrogens_dropped_by_element(self):
+        # a hydrogen whose name starts with a digit is kept by the PDB rule but dropped by element
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, "h.cif")
+        with open(TEST_CIF) as f:
+            text = f.read()
+        extra = ("ATOM 9999 H 1HB . LYS A 1 2 ? 27.0 36.0 14.0 1.00 10.00 ? 21 LYS A 1HB 1\n"
+                 "ATOM 9998 C CX . LYS A 1 2 ? 27.0 36.0 15.0 1.00 10.00 ? 21 LYS A CX 1\n")
+        text = text.replace("ATOM   1 ", extra + "ATOM   1 ", 1)
+        with open(path, "w") as f:
+            f.write(text)
+        names = [a.atom_name for a in PDBTools.read_PDB_file(path).atomList if a.res_no == 21]
+        self.assertIn("CX", names)
+        self.assertNotIn("1HB", names)
+
+
+class WriteSubset(unittest.TestCase):
+
+    def test_atoms_only(self):
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        out = os.path.join(directory, "subset.cif")
+        PDBTools.write_mmcif_subset(TEST_CIF, out, lambda group, chain, number, icode, name: group == "ATOM")
+        with open(out) as f:
+            lines = f.readlines()
+        with open(TEST_CIF) as f:
+            original = f.readlines()
+        self.assertEqual(sum(1 for l in lines if l.startswith("HETATM")), 0)
+        # every ATOM row is kept (1002 rows: one atom has two alternative locations)
+        self.assertEqual(sum(1 for l in lines if l.startswith("ATOM")), sum(1 for l in original if l.startswith("ATOM")))
+        self.assertEqual([l for l in lines if not l.startswith(("ATOM", "HETATM"))],
+                         [l for l in original if not l.startswith(("ATOM", "HETATM"))])
+        self.assertEqual(len(PDBTools.read_PDB_file(out, hetatm=True).atomList), 1001)
+
+    def test_for_surface(self):
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        out = os.path.join(directory, "surface.cif")
+        PDBTools.write_mmcif_for_surface(MODRES_CIF, out, ligands=False)
+        with open(out) as f:
+            het = [l.split()[17] for l in f if l.startswith("HETATM")]
+        self.assertEqual(set(het), {"MSE"})
+        PDBTools.write_mmcif_for_surface(MODRES_CIF, out, ligands=True)
+        with open(out) as f:
+            het = [l.split()[17] for l in f if l.startswith("HETATM")]
+        self.assertEqual(set(het), {"MSE", "SE4", "BME"})
+
+
+class Euclidean(unittest.TestCase):
+
+    def test_structure_matches_file(self):
+        structure = PDBTools.read_PDB_file(TEST_PDB)
+        sasds = {((21, "A", "LYS"), (26, "A", "LYS"), 10.0): [], ((26, "A", "LYS"), (125, "A", "LYS"), 24.0): []}
+        from_file = SASDTools.get_euclidean_distances(sasds, TEST_PDB, "LYS", "LYS")
+        from_structure = SASDTools.get_euclidean_distances(sasds, TEST_PDB, "LYS", "LYS", structure)
+        self.assertEqual(from_file, from_structure)
+        from_cif = SASDTools.get_euclidean_distances(sasds, TEST_CIF, "LYS", "LYS", PDBTools.read_PDB_file(TEST_CIF))
+        self.assertEqual(from_file, from_cif)
+        self.assertEqual(len(from_file), 2)
+
+    def test_unknown_residue_dropped(self):
+        structure = PDBTools.read_PDB_file(TEST_PDB)
+        sasds = {((21, "A", "LYS"), (999, "A", "LYS"), 10.0): []}
+        self.assertEqual(SASDTools.get_euclidean_distances(sasds, TEST_PDB, "LYS", "LYS", structure), {})
+
+    def test_modified_residue_is_a_site(self):
+        structure = PDBTools.read_PDB_file(MODRES_CIF)
+        sasds = {((142, "A", "MSE"), (46, "A", "LYS"), 10.0): []}
+        result = SASDTools.get_euclidean_distances(sasds, MODRES_CIF, "MSE", "LYS", structure)
+        self.assertEqual(len(result), 1)
+
+    def test_hetero_ion_named_ca_is_not_used(self):
+        class Atom:
+            def __init__(self, record_name, res_no, res, x, y):
+                self.record_name, self.atom_name, self.chain = record_name, "CA", "A"
+                self.res_no, self.res, self.x, self.y, self.z = res_no, res, x, y, 0.0
+
+        class Structure:
+            atomList = [Atom("ATOM", 10, "LYS", 0.0, 0.0), Atom("ATOM", 20, "LYS", 3.0, 4.0),
+                        Atom("HETATM", 10, "CA", 50.0, 0.0)]
+
+        sasds = {((10, "A", "LYS"), (20, "A", "LYS"), 10.0): []}
+        result = SASDTools.get_euclidean_distances(sasds, None, "LYS", "LYS", Structure())
+        self.assertEqual([k[3] for k in result], [5.0])
+
+
+class CommandLine(unittest.TestCase):
+
+    def test_cif_gives_pdb_results(self):
+        pdb_dir, _ = run_jwalk(TEST_PDB)
+        self.addCleanup(shutil.rmtree, pdb_dir)
+        cif_dir, stdout = run_jwalk(TEST_CIF)
+        self.addCleanup(shutil.rmtree, cif_dir)
+        self.assertIn("66 SASDs calculated", stdout)
+        # the files differ only in the input file name in the Model column
+        self.assertEqual(result_text(pdb_dir, "test"), result_text(cif_dir, "test").replace("test.cif     ", "test.pdb     "))
+        with open(os.path.join(pdb_dir, "Jwalk_results", "test_crosslinks.pdb")) as a, \
+             open(os.path.join(cif_dir, "Jwalk_results", "test_crosslinks.pdb")) as b:
+            self.assertEqual(a.read(), b.read())
+
+    def test_modified_residue_runs(self):
+        directory, stdout = run_jwalk(MODRES_CIF)
+        self.addCleanup(shutil.rmtree, directory)
+        self.assertIn("66 SASDs calculated", stdout)
+        self.assertEqual(len(read_crosslink_list(directory, MODRES_CIF)), 66)
+
+    def test_crosslink_list_on_modified_residue(self):
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        with open(os.path.join(directory, "xl.txt"), "w") as f:
+            f.write("142|A|46|A|\n")
+        shutil.copy(MODRES_CIF, directory)
+        env = dict(os.environ, PYTHONPATH=SRC_DIR)
+        result = subprocess.run([sys.executable, JWALK_SCRIPT, "-i", "test_modres.cif", "-xl_list", "xl.txt",
+                                 "-ncpus", "1"], cwd=directory, env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 SASDs calculated", result.stdout)
+        with open(os.path.join(directory, "Jwalk_results", "test_modres_crosslink_list.txt")) as f:
+            self.assertIn("MSE-142-A-CA", f.read())
+
+    def test_default_file_list_includes_cif(self):
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        shutil.copy(TEST_CIF, directory)
+        env = dict(os.environ, PYTHONPATH=SRC_DIR)
+        result = subprocess.run([sys.executable, JWALK_SCRIPT, "-ncpus", "1"], cwd=directory, env=env,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("calculating crosslinks on test.cif", result.stdout)
+        self.assertTrue(os.path.exists(os.path.join(directory, "Jwalk_results", "test_crosslink_list.txt")))
+
+    def test_same_base_name_is_an_error_in_the_default_scan(self):
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        shutil.copy(TEST_PDB, directory)
+        shutil.copy(TEST_CIF, directory)
+        env = dict(os.environ, PYTHONPATH=SRC_DIR)
+        result = subprocess.run([sys.executable, JWALK_SCRIPT, "-ncpus", "1"], cwd=directory, env=env,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("test.cif and test.pdb", result.stderr)
+        self.assertIn("-i", result.stderr)
+        self.assertFalse(os.path.exists(os.path.join(directory, "Jwalk_results")))
+        # naming one of them still works
+        result = subprocess.run([sys.executable, JWALK_SCRIPT, "-i", "test.cif", "-ncpus", "1"], cwd=directory,
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("66 SASDs calculated", result.stdout)
+
+    def test_help_mentions_mmcif(self):
+        result = subprocess.run([sys.executable, JWALK_SCRIPT, "-h"], env=dict(os.environ, PYTHONPATH=SRC_DIR),
+                                capture_output=True, text=True)
+        self.assertIn("mmCIF", result.stdout)
+
+
+class LongChainIds(unittest.TestCase):
+
+    def test_output_with_two_character_chains(self):
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        cwd = os.getcwd()
+        os.chdir(directory)
+        try:
+            path = [[1, 1, 1], [2, 2, 2], [3, 3, 3]]
+            sasds = {((27, "A0", "LYS"), (36, "Az", "LYS"), 50.0, 28.5): path}
+            PDBTools.write_sasd_to_txt(sasds, "9syg.cif")
+            grid = GridTools.Map(__import__("numpy").zeros((5, 5, 5)), [0, 0, 0], 1, "g")
+            PDBTools.write_sasd_to_pdb(grid, sasds, "9syg.cif")
+        finally:
+            os.chdir(cwd)
+        text = result_text(directory, "9syg")
+        self.assertIn("LYS-27-A0-CA", text)
+        self.assertIn("LYS-36-Az-CA", text)
+        with open(os.path.join(directory, "Jwalk_results", "9syg_crosslinks.pdb")) as f:
+            self.assertTrue(f.readline().startswith("MODEL 1 LYS27A0-LYS36Az"))
+
+    def test_rsa_words(self):
+        residues = {(22, "A0", "GLU"): None, (148, "Az", "LYS"): None, (217, "B", "ALA"): None}
+        words = SurfaceTools.rsa_words(residues)
+        self.assertEqual(words[("GLU", "A022")], (22, "A0", "GLU"))
+        self.assertEqual(SurfaceTools.parse_rsa_line("RES GLU  A022    111.28  64.7  45.52  34.9  65.75 157.6  60.15 100.3  51.13  45.6", words),
+                         (22, "A0", "GLU", 64.7))
+        self.assertEqual(SurfaceTools.parse_rsa_line("RES LYS  Az148   241.12 120.4 169.60 107.0  71.52 161.4 169.60 110.2  71.52 155.2", words),
+                         (148, "Az", "LYS", 120.4))
+        # insertion code on the residue number
+        self.assertEqual(SurfaceTools.parse_rsa_line("RES ALA   B217A    0.05   0.0   0.00   0.0   0.05   0.1   0.00   0.0   0.05   0.1", words),
+                         (217, "B", "ALA", 0.0))
+        # a residue that is not of interest, and a hetero residue without relative SASA
+        self.assertIsNone(SurfaceTools.parse_rsa_line("RES GLY  A023    20.72  19.2  11.27  17.6   9.45  21.5  11.30  15.9   9.42  25.7", words))
+        self.assertIsNone(SurfaceTools.parse_rsa_line("RES PSU  AA61    164.53   N/A  83.09   N/A  81.44   N/A  21.0   N/A  10.0   N/A", words))
+        # the PDB layouts still parse when words is given
+        self.assertEqual(SurfaceTools.parse_rsa_line("RES LYS A  21   102.55  42.4  85.10  54.0  17.45  17.0  58.87  73.7  43.68  26.9", words),
+                         (21, "A", "LYS", 42.4))
+
+
+def chain_a0_cif(directory, name, drop_ins_code=False):
+    """Examples/test.cif with every chain renamed A0, and optionally without the pdbx_PDB_ins_code column."""
+    with open(TEST_CIF) as f:
+        lines = f.read().split("\n")
+    columns = [l.split()[0][len("_atom_site."):] for l in lines if l.startswith("_atom_site.")]
+    chain, ins_code = columns.index("auth_asym_id"), columns.index("pdbx_PDB_ins_code")
+    out = []
+    for line in lines:
+        if drop_ins_code and line.startswith("_atom_site.pdbx_PDB_ins_code"):
+            continue
+        tokens = line.split()
+        if len(tokens) == len(columns) and tokens[0] in ("ATOM", "HETATM"):
+            tokens[chain] = "A0"
+            if drop_ins_code:
+                del tokens[ins_code]
+            line = " ".join(tokens)
+        out.append(line)
+    path = os.path.join(directory, name)
+    with open(path, "w") as f:
+        f.write("\n".join(out))
+    return path
+
+
+class ChainLabels(unittest.TestCase):
+    """freesasa runs the chain label and the residue number together, so chain A0 residue 22 and
+    chain A02 residue 2 are both A022. The chains of the copy freesasa reads get labels of one length."""
+
+    def test_labels_have_one_length_and_are_unique(self):
+        for count in (1, 3, 62, 63, 3844, 3845):
+            labels = PDBTools.surface_chain_labels(["c%d" % k for k in range(count)])
+            self.assertEqual(len(labels), count)
+            self.assertEqual(len(set(labels.values())), count)
+            self.assertEqual(len(set(len(v) for v in labels.values())), 1)
+            self.assertGreaterEqual(len(next(iter(labels.values()))), 2)
+        self.assertEqual(len(PDBTools.surface_chain_labels(["a"] * 5 + ["b"])), 2)
+
+    def test_same_word_for_two_residues_without_labels(self):
+        residues = {(22, "A0", "LYS"): None, (2, "A02", "LYS"): None}
+        with self.assertRaises(ValueError) as caught:
+            SurfaceTools.rsa_words(residues)
+        for part in ("LYS 22 of chain A0", "LYS 2 of chain A02", "A022"):
+            self.assertIn(part, str(caught.exception))
+        labels = PDBTools.surface_chain_labels(["A0", "A02"])
+        words = SurfaceTools.rsa_words(residues, labels)
+        self.assertEqual(len(words), 2)
+        self.assertEqual(words[("LYS", labels["A0"] + "22")], (22, "A0", "LYS"))
+        self.assertEqual(words[("LYS", labels["A02"] + "2")], (2, "A02", "LYS"))
+
+    def test_chain_a_residue_12_and_chain_a1_residue_2(self):
+        residues = {(12, "A", "LYS"): None, (2, "A1", "LYS"): None}
+        labels = PDBTools.surface_chain_labels(["A", "A1"])
+        words = SurfaceTools.rsa_words(residues, labels)
+        self.assertEqual(sorted(words.values()), [(2, "A1", "LYS"), (12, "A", "LYS")])
+
+    def test_copy_without_a_needed_column_keeps_its_chains_and_returns_no_labels(self):
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        source = chain_a0_cif(directory, "no_ins_code.cif", drop_ins_code=True)
+        out = os.path.join(directory, "surface.cif")
+        self.assertEqual(PDBTools.write_mmcif_for_surface(source, out, ligands=False), {})
+        with open(out) as f:
+            chains = set(l.split()[17] for l in f if l.startswith(("ATOM", "HETATM")))
+        self.assertEqual(chains, {"A0"})
+
+    def test_quoted_value_with_a_space_does_not_stop_the_relabelling(self):
+        self.assertEqual(PDBTools.cif_values("ATOM 1 \"C A\" O5' 'x y' \"O5'\" z"),
+                         ["ATOM", "1", '"C A"', "O5'", "'x y'", '"O5\'"', "z"])
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        source = os.path.join(directory, "quoted.cif")
+        with open(TEST_CIF) as f:
+            text = f.read()
+        with open(source, "w") as f:
+            f.write(text.replace(" CA ", ' "C A" ', 1))
+        out = os.path.join(directory, "surface.cif")
+        labels = PDBTools.write_mmcif_for_surface(source, out, ligands=False)
+        self.assertEqual(labels, {"A": "00"})
+        with open(out) as f:
+            rows = [PDBTools.cif_values(l) for l in f if l.startswith(("ATOM", "HETATM"))]
+        self.assertIn('"C A"', [r[3] for r in rows])
+        self.assertEqual(set(r[18] for r in rows), {"00"})
+
+    def test_line_not_of_interest_is_not_read_as_a_residue(self):
+        words = SurfaceTools.rsa_words({(21, "A", "LYS"): None}, {"A": "00"})
+        self.assertEqual(SurfaceTools.parse_rsa_line(
+            "RES LYS  0021     61.98  31.0  61.46  38.8   0.52   1.2  30.23  26.1  31.75  37.7", words),
+            (21, "A", "LYS", 31.0))
+        self.assertIsNone(SurfaceTools.parse_rsa_line(
+            "RES PRO  0020    107.63  79.2  98.04  90.1   9.58  35.4  98.04  81.3   9.58  63.2", words))
+
+    def test_copy_is_relabelled(self):
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        out = os.path.join(directory, "surface.cif")
+        labels = PDBTools.write_mmcif_for_surface(TEST_CIF, out, ligands=True)
+        self.assertEqual(list(labels), ["A"])
+        with open(out) as f:
+            chains = set(l.split()[18] for l in f if l.startswith(("ATOM", "HETATM")))
+        self.assertEqual(chains, {labels["A"]})
+        self.assertNotEqual(labels["A"], "A")
+        # the atoms are the same as in the file
+        self.assertEqual(len(PDBTools.read_PDB_file(out, hetatm=True).atomList), 1001 + 18)
+
+
+@unittest.skipUnless(shutil.which("freesasa"), "freesasa is not on the PATH")
+class ChainWordCollision(unittest.TestCase):
+    """LEU 23 of chain A0 (buried) and LEU 98 of chain A02, renumbered 3 (exposed), are both A023."""
+
+    LEU = {"buried": (23, "A0", "LEU"), "exposed": (3, "A02", "LEU")}
+
+    def make_cif(self, directory, name, second_chain):
+        with open(TEST_CIF) as f:
+            lines = f.read().split("\n")
+        columns = [l.split()[0][len("_atom_site."):] for l in lines if l.startswith("_atom_site.")]
+        chain, number = columns.index("auth_asym_id"), columns.index("auth_seq_id")
+        out = []
+        for line in lines:
+            tokens = line.split()
+            if len(tokens) == len(columns) and tokens[0] in ("ATOM", "HETATM"):
+                if tokens[number] == "98":
+                    tokens[chain], tokens[number] = second_chain, "3"
+                else:
+                    tokens[chain] = "A0"
+                line = " ".join(tokens)
+            out.append(line)
+        path = os.path.join(directory, name)
+        with open(path, "w") as f:
+            f.write("\n".join(out))
+        return path
+
+    def exposed(self, path, residues):
+        return SurfaceTools.check_solvent_accessibility_freesasa(
+            path, dict((r, [0, 0, 0]) for r in residues), "freesasa", xl_list=True, hetatm=False)
+
+    def test_each_residue_gets_its_own_exposure(self):
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        # the same structure with no clash, as the reference
+        reference = self.make_cif(directory, "reference.cif", "B")
+        truth = self.exposed(reference, [(23, "A0", "LEU"), (3, "B", "LEU")])
+        self.assertEqual(list(truth), [(3, "B", "LEU")])
+        collision = self.make_cif(directory, "collision.cif", "A02")
+        for residues in ([self.LEU["buried"], self.LEU["exposed"]], [self.LEU["exposed"], self.LEU["buried"]]):
+            self.assertEqual(list(self.exposed(collision, residues)), [self.LEU["exposed"]])
+
+
+
+class SurfaceTempFiles(unittest.TestCase):
+    """The copies freesasa is given are written to a private directory, not next to the input.
+
+    Uses a stand-in for freesasa that records the input it was given and writes Examples/test.rsa.
+    """
+
+    def setUp(self):
+        self.directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, self.directory)
+        self.inputs = os.path.join(self.directory, "inputs")
+        self.scratch = os.path.join(self.directory, "scratch")
+        os.mkdir(self.inputs)
+        os.mkdir(self.scratch)
+        patch = mock.patch.object(tempfile, "tempdir", self.scratch)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.log = os.path.join(self.directory, "freesasa_args.log")
+        self.rsa_source = os.path.join(self.directory, "fake.rsa")
+        shutil.copy(os.path.join(EXAMPLES, "test.rsa"), self.rsa_source)
+        self.fake = os.path.join(self.directory, "fake_freesasa")
+        with open(self.fake, "w") as f:
+            f.write("#!/bin/sh\n"
+                    "for a in \"$@\"; do case $a in --output=*) out=${a#--output=};; esac; last=$a; done\n"
+                    "echo \"$last\" > '%s'\n"
+                    "cp '%s' \"$out\"\n" % (self.log, self.rsa_source))
+        os.chmod(self.fake, 0o755)
+
+    def run_surface(self, example):
+        path = os.path.join(self.inputs, os.path.basename(example))
+        shutil.copy(example, path)
+        SurfaceTools.check_solvent_accessibility_freesasa(path, {(21, "A", "LYS"): [0, 0, 0]}, self.fake,
+                                                          xl_list=True, hetatm=True)
+        with open(self.log) as f:
+            return f.read().strip()
+
+    def test_nowater_copy_is_not_left_beside_the_input(self):
+        given = self.run_surface(TEST_PDB)
+        self.assertEqual(os.path.basename(given), "test_nowater.pdb")
+        self.assertTrue(given.startswith(self.scratch + os.sep))
+        self.assertEqual(sorted(os.listdir(self.inputs)), ["test.pdb", "test.rsa"])
+        self.assertEqual(os.listdir(self.scratch), [])
+
+    def test_mmcif_copy_is_not_left_beside_the_input(self):
+        given = self.run_surface(TEST_CIF)
+        self.assertEqual(os.path.basename(given), "test_jwalk.cif")
+        self.assertTrue(given.startswith(self.scratch + os.sep))
+        self.assertEqual(sorted(os.listdir(self.inputs)), ["test.cif", "test.rsa"])
+        self.assertEqual(os.listdir(self.scratch), [])
+
+    def test_copy_that_could_not_be_relabelled_is_read_with_its_own_chains(self):
+        # no pdbx_PDB_ins_code column, so the copy keeps chain A0 and the .rsa words are A023 and A098
+        with open(self.rsa_source, "w") as f:
+            f.write("RES LEU  A023      0.28   0.2   0.28   0.2   0.00   0.0   0.28   0.2   0.00   0.0\n"
+                    "RES LEU  A098    107.63  46.9  98.04  90.1   9.58  35.4  98.04  81.3   9.58  63.2\n")
+        path = chain_a0_cif(self.inputs, "no_ins_code.cif", drop_ins_code=True)
+        exposed = SurfaceTools.check_solvent_accessibility_freesasa(
+            path, {(23, "A0", "LEU"): [0, 0, 0], (98, "A0", "LEU"): [0, 0, 0]}, self.fake, xl_list=True,
+            hetatm=False)
+        self.assertEqual(list(exposed), [(98, "A0", "LEU")])
+
+    def test_clashing_residues_stop_the_run_before_freesasa_with_a_message(self):
+        # no pdbx_PDB_ins_code column, so the copy keeps its chains and A0 22 and A02 2 are both A022
+        path = chain_a0_cif(self.inputs, "no_ins_code.cif", drop_ins_code=True)
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed), self.assertRaises(SystemExit) as stopped:
+            SurfaceTools.check_solvent_accessibility_freesasa(
+                path, {(22, "A0", "LYS"): [0, 0, 0], (2, "A02", "LYS"): [0, 0, 0]}, self.fake, xl_list=True,
+                hetatm=False)
+        self.assertEqual(stopped.exception.code, 1)
+        for part in ("-surface", "no_ins_code.cif", "LYS 22 of chain A0", "LYS 2 of chain A02", "A022"):
+            self.assertIn(part, printed.getvalue())
+        self.assertFalse(os.path.exists(self.log))
+        self.assertEqual(os.listdir(self.inputs), ["no_ins_code.cif"])
+        self.assertEqual(os.listdir(self.scratch), [])
+
+    def test_no_temp_directory_for_a_plain_pdb(self):
+        path = os.path.join(self.inputs, "test.pdb")
+        shutil.copy(TEST_PDB, path)
+        with mock.patch.object(tempfile, "mkdtemp", side_effect=AssertionError("no temp directory needed")):
+            SurfaceTools.check_solvent_accessibility_freesasa(path, {(21, "A", "LYS"): [0, 0, 0]}, self.fake,
+                                                              xl_list=True, hetatm=False)
+        self.assertEqual(sorted(os.listdir(self.inputs)), ["test.pdb", "test.rsa"])
+
+    def test_temp_directory_removed_when_freesasa_is_missing(self):
+        path = os.path.join(self.inputs, "test.pdb")
+        shutil.copy(TEST_PDB, path)
+        with self.assertRaises(SystemExit):
+            SurfaceTools.check_solvent_accessibility_freesasa(path, {(21, "A", "LYS"): [0, 0, 0]},
+                                                              os.path.join(self.directory, "no_such_freesasa"),
+                                                              xl_list=True, hetatm=True)
+        self.assertEqual(os.listdir(self.scratch), [])
+        self.assertEqual(os.listdir(self.inputs), ["test.pdb"])
+
+
+@unittest.skipUnless(shutil.which("freesasa"), "freesasa is not on the PATH")
+class SurfaceMMCIF(unittest.TestCase):
+
+    def test_surface_on_cif_matches_pdb(self):
+        pdb_dir, pdb_out = run_jwalk(TEST_PDB, "-surface")
+        self.addCleanup(shutil.rmtree, pdb_dir)
+        cif_dir, cif_out = run_jwalk(TEST_CIF, "-surface")
+        self.addCleanup(shutil.rmtree, cif_dir)
+        self.assertIn("12 are on the surface", cif_out)
+        self.assertEqual(read_crosslink_list(pdb_dir, TEST_PDB), read_crosslink_list(cif_dir, TEST_CIF))
+        with open(os.path.join(cif_dir, "test.rsa")) as f:
+            rsa = f.read()
+        self.assertIn("RES LYS", rsa)
+        self.assertNotIn("SE4", rsa)
+        self.assertNotIn("HOH", rsa)
+        self.assertFalse(os.path.exists(os.path.join(cif_dir, "test_jwalk.cif")))
+
+    def test_surface_with_ligand_on_cif(self):
+        directory, stdout = run_jwalk(TEST_CIF, "-surface", "-ligand")
+        self.addCleanup(shutil.rmtree, directory)
+        with open(os.path.join(directory, "test.rsa")) as f:
+            rsa = f.read()
+        self.assertIn("SE4", rsa)
+        self.assertIn("BME", rsa)
+        self.assertNotIn("HOH", rsa)
+        self.assertIn("12 are on the surface", stdout)
+
+    def test_surface_sees_modified_residue(self):
+        directory, stdout = run_jwalk(MODRES_CIF, "-surface")
+        self.addCleanup(shutil.rmtree, directory)
+        with open(os.path.join(directory, "test_modres.rsa")) as f:
+            rsa = f.read()
+        self.assertIn("MSE", rsa)
+        self.assertNotIn("SE4", rsa)
+        self.assertIn("12 are on the surface", stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

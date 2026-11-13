@@ -1,0 +1,3 @@
+# virtual environment and bytecode
+Jwalk/src/venv/
+__pycache__/
