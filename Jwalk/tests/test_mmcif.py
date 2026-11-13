@@ -240,6 +240,24 @@ class CommandLine(unittest.TestCase):
         self.assertIn("calculating crosslinks on test.cif", result.stdout)
         self.assertTrue(os.path.exists(os.path.join(directory, "Jwalk_results", "test_crosslink_list.txt")))
 
+    def test_same_base_name_is_an_error_in_the_default_scan(self):
+        directory = tempfile.mkdtemp(prefix="jwalk_test_")
+        self.addCleanup(shutil.rmtree, directory)
+        shutil.copy(TEST_PDB, directory)
+        shutil.copy(TEST_CIF, directory)
+        env = dict(os.environ, PYTHONPATH=SRC_DIR)
+        result = subprocess.run([sys.executable, JWALK_SCRIPT, "-ncpus", "1"], cwd=directory, env=env,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("test.cif and test.pdb", result.stderr)
+        self.assertIn("-i", result.stderr)
+        self.assertFalse(os.path.exists(os.path.join(directory, "Jwalk_results")))
+        # naming one of them still works
+        result = subprocess.run([sys.executable, JWALK_SCRIPT, "-i", "test.cif", "-ncpus", "1"], cwd=directory,
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("66 SASDs calculated", result.stdout)
+
     def test_help_mentions_mmcif(self):
         result = subprocess.run([sys.executable, JWALK_SCRIPT, "-h"], env=dict(os.environ, PYTHONPATH=SRC_DIR),
                                 capture_output=True, text=True)

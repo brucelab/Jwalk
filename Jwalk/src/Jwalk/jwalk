@@ -117,6 +117,16 @@ if args.max_dist:
 
 if args.i:
 	pdb_list = [args.i[0]]
+else:
+	# results are named from the file's base name, so model.pdb and model.cif would overwrite each other
+	pdb_list.sort()
+	same_name = {}
+	for f in pdb_list:
+		same_name.setdefault(os.path.splitext(f)[0], []).append(f)
+	clashes = [' and '.join(v) for v in same_name.values() if len(v) > 1]
+	if clashes:
+		parser.error('these input files would write the same results files: ' + '; '.join(clashes)
+					 + ' (choose one with -i)')
 	
 if args.vox:
 	vox = int(args.vox[0])

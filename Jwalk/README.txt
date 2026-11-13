@@ -68,7 +68,9 @@ type "jwalk" plus any of the below flags:
 A value that isn't a whole number for -vox, -max_dist or -ncpus is reported as a usage error.
 
 if no flags are added, Jwalk will calculate the SASDs between all lysine residues on
-every .pdb, .cif and .mmcif file in the directory.
+every .pdb, .cif and .mmcif file in the directory. Results are named after the file's base name, so
+if two of those files share one (model.pdb and model.cif), Jwalk stops with a usage error before
+calculating anything: choose one with -i.
 
 INPUT FORMATS:
 

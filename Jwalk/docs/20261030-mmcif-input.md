@@ -12,6 +12,9 @@ jwalk -lys -i 9syg.cif -ligand
 jwalk                              # every .pdb, .cif and .mmcif file in the directory
 ```
 
+If two of those files share a base name (`9syg.pdb` and `9syg.cif`), their results would overwrite each
+other, so a bare `jwalk` stops with a usage error; choose one with `-i`.
+
 Every option works as for a PDB file. Results go to `Jwalk_results/<base name>_crosslink_list.txt`
 and `<base name>_crosslinks.pdb`, so `9syg.cif` gives `9syg_crosslink_list.txt` with `9syg.cif` in
 the Model column. Chain ids are written as they are in the file (`LYS-27-A0-CA`); the `MODEL` line of
